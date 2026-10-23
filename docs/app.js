@@ -15,7 +15,14 @@ const state = {
   metric: 'cagr', log: true,
   strategy: 'bh', trendCustom: { 1: {}, 2: {} }, signalPrice: 'raw', chartAsset: '00631L',
   mcN: 1000, mcYears: 10, mcSeed: 1, mcBlock: 120, mcMetric: 'cagr',
+  rbWeights: { '0050': 0, '00631L': 50, '00675L': 0, CASH: 50 }, rbFreq: 'Q', rbBand: 5, rbCash: 1, rbTrend: false,
 };
+const RB_PRESETS = [
+  ['00631L 50% ＋ 現金', { '0050': 0, '00631L': 50, '00675L': 0, CASH: 50 }],
+  ['00631L 65% ＋ 現金（約 1.3 倍）', { '0050': 0, '00631L': 65, '00675L': 0, CASH: 35 }],
+  ['0050 50% ＋ 00631L 50%', { '0050': 50, '00631L': 50, '00675L': 0, CASH: 0 }],
+];
+const RB_NAMES = { '0050': '0050', '00631L': '00631L', '00675L': '00675L', CASH: '現金' };
 let mcLast = null, mcToken = 0;   // 上一次蒙地卡羅結果（設定一樣才顯示）、執行中的代號（換設定就作廢）
 const PARAM_FIELDS = [
   ['maFast', '快線（日）', 1, 2, 500],
@@ -60,6 +67,7 @@ function restore() {
     if (s) Object.assign(state, s, {
       assets: new Set(s.assets?.length ? s.assets : ORDER),
       trendCustom: { 1: { ...(s.trendCustom?.[1] || {}) }, 2: { ...(s.trendCustom?.[2] || {}) } },
+      rbWeights: { '0050': 0, '00631L': 0, '00675L': 0, CASH: 0, ...(s.rbWeights || { '00631L': 50, CASH: 50 }) },
     });
   } catch (_) { /* 忽略 */ }
 }
@@ -133,6 +141,7 @@ function buildControls() {
   $('resetParams').addEventListener('click', () => {
     state.trendCustom = { 1: {}, 2: {} }; buildParams(); changed();
   });
+  buildRebalControls();
   syncStrategyUI();
 
   // 蒙地卡羅：改設定不自動跑（比較久），按按鈕才跑
@@ -173,12 +182,14 @@ function buildParams() {
 }
 
 function syncStrategyUI() {
-  const trend = state.strategy === 'trend';
-  $('stratName').textContent = trend ? '均線趨勢（接刀）' : '買進持有';
+  const trend = state.strategy === 'trend', rebal = state.strategy === 'rebal';
+  $('stratName').textContent = trend ? '均線趨勢（接刀）' : rebal ? '再平衡' : '買進持有';
   $('strategySeg').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', b.dataset.s === state.strategy));
-  $('mcTab').hidden = !trend;
-  if (!trend && state.mode === 'mc') { state.mode = 'period'; showMode(); }
-  $('trendCard').hidden = !trend;
+  $('mcTab').hidden = !(trend || rebal);
+  if (!(trend || rebal) && state.mode === 'mc') { state.mode = 'period'; showMode(); }
+  $('trendCard').hidden = !(trend || (rebal && state.rbTrend));
+  $('rebalCard').hidden = !rebal;
+  $('assetsField').hidden = rebal;
   const chip = $('assets').querySelector('[data-code="TAIEX"]');
   if (chip) { chip.disabled = trend; chip.title = trend ? '大盤是指數不能交易，策略模式不列入' : ''; }
 }
@@ -203,7 +214,8 @@ function run() {
   $('excessRow').classList.toggle('disabled', !state.useSyn);
   const t0 = performance.now();
   try {
-    if (state.strategy === 'trend') runTrend();
+    if (state.strategy === 'rebal') runRebal();
+    else if (state.strategy === 'trend') runTrend();
     else if (state.mode === 'period') renderPeriod(E.period(DATA, codes(), state.start, state.end, opts()));
     else if (state.mode === 'rolling') {
       const rows = E.rolling(DATA, codes(), state.rollYears, opts());
@@ -213,12 +225,190 @@ function run() {
       const rows = E.randomWindows(DATA, codes(), state.rndN, lo, hi, state.seed, opts());
       renderMulti(rows, `隨機 ${state.rndN} 個區間，長度 ${lo}～${hi} 年（種子 ${state.seed}）`);
     }
-    if (!(state.strategy === 'trend' && state.mode === 'mc')) $('status').textContent = `計算 ${Math.round(performance.now() - t0)} 毫秒`;
+    if (!(state.strategy !== 'bh' && state.mode === 'mc')) $('status').textContent = `計算 ${Math.round(performance.now() - t0)} 毫秒`;
   } catch (err) {
     $('results').innerHTML = `<div class="warn">${esc(err.message)}</div>`;
     $('status').textContent = '';
     console.error(err);
   }
+}
+
+// ---------- 再平衡：設定 ----------
+function buildRebalControls() {
+  $('rbPresets').innerHTML = RB_PRESETS.map(([t], i) => `<button class="chip" type="button" data-i="${i}">${t}</button>`).join('');
+  $('rbPresets').addEventListener('click', e => {
+    const b = e.target.closest('.chip'); if (!b) return;
+    state.rbWeights = { ...RB_PRESETS[+b.dataset.i][1] }; drawWeights(); changed();
+  });
+  drawWeights();
+  $('rbFreq').value = state.rbFreq; $('rbBand').value = state.rbBand; $('rbCash').value = state.rbCash; $('rbTrend').checked = state.rbTrend;
+  $('rbFreq').addEventListener('change', () => { state.rbFreq = $('rbFreq').value; ruleText(); changed(); });
+  $('rbBand').addEventListener('input', () => { const v = Number($('rbBand').value); if (v >= 0 && v <= 50) { state.rbBand = v; ruleText(); changed(); } });
+  $('rbCash').addEventListener('input', () => { const v = Number($('rbCash').value); if (v >= 0 && v <= 10) { state.rbCash = v; changed(); } });
+  $('rbTrend').addEventListener('change', () => { state.rbTrend = $('rbTrend').checked; syncStrategyUI(); changed(); });
+  ruleText();
+}
+function drawWeights() {
+  $('rbWeights').innerHTML = Object.keys(RB_NAMES).map(k => `<label class="field"><span class="label">${RB_NAMES[k]} %</span>
+    <input type="number" inputmode="decimal" min="0" max="100" step="5" data-k="${k}" value="${state.rbWeights[k] || 0}"></label>`).join('');
+  $('rbWeights').oninput = e => {
+    const inp = e.target.closest('input'); if (!inp) return;
+    const v = Number(inp.value); if (!(v >= 0 && v <= 100)) return;
+    state.rbWeights[inp.dataset.k] = v; sumText(); changed();
+  };
+  sumText();
+}
+function sumText() {
+  const w = state.rbWeights, sum = Object.values(w).reduce((a, b) => a + (b || 0), 0);
+  let ex = '－'; try { ex = E.exposureOf(w).toFixed(2); } catch (_) { /* 全部 0 */ }
+  $('rbSum').innerHTML = `合計 ${sum}%${sum !== 100 && sum > 0 ? '（不是 100%，會照比例換算）' : ''} · 曝險約 <b>${ex} 倍</b>（正2 算 2 倍、現金 0 倍）`;
+}
+function ruleText() {
+  const f = { none: '', M: '每月', Q: '每季', H: '每半年', Y: '每年' }[state.rbFreq], b = state.rbBand;
+  $('rbRuleText').textContent = !f && !(b > 0) ? '不定期、不設門檻 = 買進後放著不調（對照組）。'
+    : !f ? `每天檢查，任一部位比例偏離目標超過 ${b} 點就調回。`
+    : !(b > 0) ? `${f}第一個交易日都調回目標比例。` : `${f}第一個交易日檢查，偏離超過 ${b} 點才調回。`;
+}
+function rbCfg() {
+  const w = Object.fromEntries(Object.entries(state.rbWeights).map(([k, v]) => [k, (v || 0) / 100]));
+  return { weights: w, freq: state.rbFreq, band: (state.rbBand || 0) / 100, cashRate: (state.rbCash || 0) / 100, trend: state.rbTrend };
+}
+
+function runRebal() {
+  let cfg;
+  try { cfg = rbCfg(); E.normWeights(cfg.weights); } catch (err) { destroyCharts(); $('results').innerHTML = `<div class="warn">${esc(err.message)}</div>`; return; }
+  if (state.mode === 'mc') { mcToken++; renderMCIdle(); return; }
+  if (state.mode === 'period') return renderRebalPeriod(cfg);
+  let wins, title;
+  if (state.mode === 'rolling') { wins = E.rollingWins(DATA, state.rollYears); title = `${state.rollYears} 年滾動區間（每個月初一個起點）`; }
+  else {
+    const lo = Math.min(state.rndMin, state.rndMax), hi = Math.max(state.rndMin, state.rndMax);
+    wins = E.randomWins(DATA, state.rndN, lo, hi, state.seed); title = `隨機 ${state.rndN} 個區間，長度 ${lo}～${hi} 年（種子 ${state.seed}）`;
+  }
+  renderRebalMulti(cfg, wins, title);
+}
+
+// 對照組：名稱、顏色
+const RB_ITEMS = [
+  ['main', '再平衡策略', '--text'], ['flat', '同配置不再平衡', '--muted'], ['bh50', '0050 買進持有', '--c-0050'],
+  ['bh631', '00631L 買進持有', '--c-alt'], ['tr631', '00631L 均線策略', '--c-00631L'],
+];
+function cfgLabel(cfg) {
+  const w = E.normWeights(cfg.weights);
+  const mix = Object.entries(w).map(([k, v]) => `${RB_NAMES[k]} ${Math.round(v * 100)}%`).join(' ＋ ');
+  return `${mix}${cfg.trend ? '（正2 搭配均線）' : ''} · ${$('rbRuleText').textContent.replace(/。$/, '')} · 曝險約 ${E.exposureOf(cfg.weights).toFixed(2)} 倍`;
+}
+
+function renderRebalPeriod(cfg) {
+  destroyCharts();
+  let res = E.rebalPeriod(DATA, cfg, state.start, state.end, opts(), state.trendCustom);
+  if (res.error) { $('results').innerHTML = `<div class="warn">${esc(res.error)}</div>`; return; }
+  let s0 = E.dayToIso(res.dayIdx[0]);
+  const s1 = E.dayToIso(res.dayIdx[res.dayIdx.length - 1]);
+  // 00631L 均線策略要等均線算得出來；比它早的起點，全部對照組一起延後，才是同一段期間比
+  let aligned = null;
+  const tr0 = E.trendPeriod(DATA, ['00631L'], s0, s1, opts(), state.trendCustom).results?.[0];
+  if (tr0?.shiftedFrom && tr0.shiftedFrom > s0) {
+    aligned = tr0.shiftedFrom;
+    res = E.rebalPeriod(DATA, cfg, aligned, s1, opts(), state.trendCustom);
+    if (res.error) { $('results').innerHTML = `<div class="warn">${esc(res.error)}</div>`; return; }
+    s0 = E.dayToIso(res.dayIdx[0]);
+  }
+  const items = [
+    { k: 'main', eq: res.main.eq, dayIdx: res.dayIdx },
+    { k: 'flat', eq: res.flat.eq, dayIdx: res.dayIdx },
+  ];
+  const bh = E.period(DATA, ['0050', '00631L'], s0, s1, opts());
+  for (const r of bh.results || []) items.push({ k: r.code === '0050' ? 'bh50' : 'bh631', eq: r.equity, dayIdx: r.dayIdx });
+  const tr = E.trendPeriod(DATA, ['00631L'], s0, s1, opts(), state.trendCustom);
+  if (tr.results?.[0]) items.push({ k: 'tr631', eq: tr.results[0].equity, dayIdx: tr.results[0].dayIdx, note: tr.results[0].shiftedFrom });
+  for (const it of items) { const m = RB_ITEMS.find(x => x[0] === it.k); it.name = m[1]; it.color = css(m[2]); it.st = E.summarize(it.eq, it.dayIdx); }
+  items.sort((a, b) => RB_ITEMS.findIndex(x => x[0] === a.k) - RB_ITEMS.findIndex(x => x[0] === b.k));
+
+  const nReb = res.main.log.filter(l => l.what === '再平衡').length, nSig = res.main.log.length - nReb;
+  let html = aligned ? `<div class="warn">00631L 均線策略要先累積均線，最早 ${aligned} 才能開始；為了在同一段期間比較，全部從那天開始。</div>`
+    : res.shifted ? `<div class="warn">這個配置最早 ${res.shifted} 才有資料${cfg.trend ? '（正2 的均線要先累積）' : ''}，從那天開始。</div>` : '';
+  html += `<section class="card"><h3>${esc(cfgLabel(cfg))}</h3>
+    <p class="hint">${s0} ～ ${s1} · 再平衡 ${nReb} 次${cfg.trend ? ` · 均線訊號 ${nSig} 次` : ''} · 交易 ${res.main.trades} 筆 · 期末 ${moneyShort(res.stats.final)}</p>
+    <div class="tbl-wrap"><table class="cmp-tbl"><thead><tr><th></th><th>年化</th><th class="tot">總報酬</th><th>最大回撤</th><th>報酬÷回撤</th></tr></thead><tbody>
+    ${items.map(it => `<tr class="${it.k === 'main' ? 'main' : ''}"><td><span class="dot" style="background:${it.color}"></span>${it.name}${it.note ? `<br><small style="color:var(--muted)">從 ${it.note} 起</small>` : ''}</td>
+      <td class="n ${cls(it.st.cagr)}">${pct(it.st.cagr, 1, true)}</td><td class="n tot">${totalShort(it.st.total)}</td>
+      <td class="n neg">${pct(it.st.mdd)}</td><td class="n">${num2(it.st.calmar)}</td></tr>`).join('')}
+    </tbody></table></div></section>`;
+  html += `<section class="card"><div class="chart-head"><h3>資產成長</h3>
+      <div class="seg" id="scaleSeg"><button type="button" data-log="1" aria-pressed="${state.log}">對數</button><button type="button" data-log="0" aria-pressed="${!state.log}">一般</button></div></div>
+    <div class="chart-box" id="cGrowth"></div>
+    <div class="legend">${items.map(it => `<span><i style="background:${it.color}"></i>${it.name}</span>`).join('')}</div></section>
+    <section class="card"><h3>回撤</h3><div class="chart-box short" id="cDD"></div></section>`;
+  $('results').innerHTML = html;
+  $('scaleSeg').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; state.log = b.dataset.log === '1'; save(); run(); });
+  const draw = [...items].reverse();     // 主策略最後畫，在最上層
+  const fmt = v => (v >= 10 ? v.toFixed(0) : v >= 1 ? v.toFixed(1) : v.toFixed(2)).replace(/\.0$/, '') + '×';
+  charts.growth = new LineChart($('cGrowth'), {
+    series: draw.map(it => ({ name: it.name, color: it.color, x: Float64Array.from(it.dayIdx, d => d * DAY_MS), y: Float64Array.from(it.eq, v => v / it.eq[0]) })),
+    log: state.log, yFmt: fmt, tipFmt: v => v.toFixed(2) + ' 倍', ariaLabel: '資產成長',
+    width: 1.5,
+  });
+  const dd = it => {
+    const n = it.eq.length, step = Math.max(1, Math.ceil(n / 1200)), xs = [], ys = [];
+    let peak = -Infinity, m = 0, mv = Infinity;
+    for (let i = 0; i < n; i++) {
+      peak = Math.max(peak, it.eq[i]); const d = it.eq[i] / peak - 1;
+      if (d < mv) { mv = d; m = i; }
+      if ((i + 1) % step === 0 || i === n - 1) { xs.push(it.dayIdx[m] * DAY_MS); ys.push(mv * 100); mv = Infinity; }
+    }
+    return { name: it.name, color: it.color, x: Float64Array.from(xs), y: Float64Array.from(ys) };
+  };
+  charts.dd = new LineChart($('cDD'), { series: draw.map(dd), yMax: 0, width: 1.1, yFmt: v => Math.round(v) + '%', tipFmt: v => v.toFixed(1) + '%', ariaLabel: '回撤' });
+}
+
+function rebalCompareTable(sets, years) {
+  // sets: [{k, cagr:[], mdd:[]}]
+  const q = (a, p) => E.quantile([...a].sort((x, y) => x - y), p);
+  return `<div class="tbl-wrap"><table class="cmp-tbl"><thead><tr><th></th><th>年化中位數</th><th>年化 5%</th><th>虧損機率</th><th>回撤中位數</th><th>回撤 5%</th></tr></thead><tbody>
+    ${sets.map(it => { const m = RB_ITEMS.find(x => x[0] === it.k); return `<tr class="${it.k === 'main' ? 'main' : ''}"><td><span class="dot" style="background:${css(m[2])}"></span>${m[1]}</td>
+      <td class="n ${cls(q(it.cagr, .5))}">${pct(q(it.cagr, .5), 1, true)}</td><td class="n ${cls(q(it.cagr, .05))}">${pct(q(it.cagr, .05), 1, true)}</td>
+      <td class="n">${pct(it.cagr.filter(x => x < 0).length / it.cagr.length, 0)}</td>
+      <td class="n neg">${pct(q(it.mdd, .5), 0)}</td><td class="n neg">${pct(q(it.mdd, .05), 0)}</td></tr>`; }).join('')}
+    </tbody></table></div>`;
+}
+function winLine(rows, keys) {
+  const name = k => RB_ITEMS.find(x => x[0] === k)[1];
+  const have = keys.filter(k => rows.some(r => r[k + 'Cagr'] !== undefined && r[k + 'Cagr'] !== null));
+  const f = (k, field) => { const g = rows.filter(r => r[k + 'Cagr'] != null); return g.filter(r => field === 'c' ? r.cagr > r[k + 'Cagr'] : r.mdd > r[k + 'Mdd']).length / g.length; };
+  return `<p class="hint">策略年化贏過：${have.map(k => `${name(k)} <b>${pct(f(k, 'c'), 0)}</b>`).join('、')}<br>最大回撤比較小：${have.map(k => `${name(k)} <b>${pct(f(k, 'm'), 0)}</b>`).join('、')}</p>`;
+}
+
+function renderRebalMulti(cfg, wins, title) {
+  destroyCharts();
+  const rows = E.rebalWindows(DATA, cfg, wins, opts(), state.trendCustom);
+  if (!rows.length) { $('results').innerHTML = `<div class="warn">沒有符合條件的區間。${state.useSyn ? '' : '只用真實資料時期間較短，試試縮短長度或開啟模擬資料。'}</div>`; return; }
+  const key = r => r.start + '|' + r.end;
+  const bh = new Map(), tr = new Map();
+  for (const r of E.windows(DATA, ['0050', '00631L'], wins, opts())) bh.set(r.code + key(r), r);
+  for (const r of E.trendWindows(DATA, ['00631L'], wins, opts(), state.trendCustom)) tr.set(key(r), r);
+  for (const r of rows) {
+    const a = bh.get('0050' + key(r)), b = bh.get('00631L' + key(r)), c = tr.get(key(r));
+    r.bh50Cagr = a?.cagr ?? null; r.bh50Mdd = a?.mdd ?? null; r.bh631Cagr = b?.cagr ?? null; r.bh631Mdd = b?.mdd ?? null;
+    r.tr631Cagr = c?.cagr ?? null; r.tr631Mdd = c?.mdd ?? null;
+  }
+  const sets = RB_ITEMS.map(([k]) => {
+    const g = k === 'main' ? rows : rows.filter(r => r[k + 'Cagr'] != null);
+    return { k, cagr: g.map(r => k === 'main' ? r.cagr : r[k + 'Cagr']), mdd: g.map(r => k === 'main' ? r.mdd : r[k + 'Mdd']) };
+  }).filter(s => s.cagr.length);
+  const m = state.metric === 'mdd' ? 'mdd' : 'cagr', M = METRICS[m];
+  const dist = sets.map(st => {
+    const arr = [...st[m]].sort((x, y) => x - y), q = p => E.quantile(arr, p);
+    const meta = RB_ITEMS.find(x => x[0] === st.k);
+    return { label: meta[1], color: css(meta[2]), s: { min: arr[0], max: arr[arr.length - 1], p5: q(.05), p25: q(.25), p50: q(.5), p75: q(.75), p95: q(.95) } };
+  });
+  $('results').innerHTML = `<section class="card"><h3>${esc(title)}</h3><p class="hint">${esc(cfgLabel(cfg))} · 共 ${rows.length} 段（對照組只算同一段期間有資料的）</p>
+      ${winLine(rows, ['flat', 'bh50', 'bh631', 'tr631'])}
+      ${rebalCompareTable(sets)}</section>
+    <section class="card"><div class="chart-head"><h3>分布</h3>
+      <div class="seg" id="metricSeg">${['cagr', 'mdd'].map(k => `<button type="button" data-m="${k}" aria-pressed="${k === m}">${METRICS[k].label}</button>`).join('')}</div></div>
+      ${rangeBars(dist, M)}</section>`;
+  $('metricSeg').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; state.metric = b.dataset.m; save(); run(); });
 }
 
 function runTrend() {
@@ -644,17 +834,21 @@ function renderTrendMulti(rows, title) {
 // ---------- 蒙地卡羅 ----------
 const BLOCK_LABEL = { 1: '每天打亂', 20: '約 1 個月', 60: '約 3 個月', 120: '約半年', 250: '約 1 年' };
 function mcKey(compare) {
-  return JSON.stringify([compare, codes(), state.useSyn, state.excess, state.signalPrice, state.trendCustom, state.capital,
+  return JSON.stringify([compare, state.strategy, state.strategy === 'rebal' ? rbCfg() : 0, codes(), state.useSyn, state.excess, state.signalPrice, state.trendCustom, state.capital,
     state.discount, state.mcN, state.mcYears, state.mcSeed, compare ? 0 : state.mcBlock]);
 }
 function renderMCIdle() {
   destroyCharts();
   $('status').textContent = '';
-  if (mcLast && mcLast.key === mcKey(mcLast.compare)) { mcLast.compare ? renderMCCompare(mcLast) : renderMC(mcLast); return; }
+  if (mcLast && mcLast.key === mcKey(mcLast.compare)) {
+    if (mcLast.rebal) { mcLast.compare ? renderRbMCCompare(mcLast) : renderRbMC(mcLast); } else { mcLast.compare ? renderMCCompare(mcLast) : renderMC(mcLast); }
+    return;
+  }
   $('results').innerHTML = `<div class="card"><p class="hint" style="margin:0">設定好之後按「開始模擬」。${state.mcN} 條大約要 ${Math.max(1, Math.round(state.mcN * codes().length * state.mcYears / 12000))} 秒（手機會慢一點）。</p></div>`;
 }
 
 async function runMC(compare) {
+  if (state.strategy === 'rebal') return runRbMC(compare);
   if (!codes().length) { $('results').innerHTML = '<div class="warn">請至少選一檔 0050、00631L 或 00675L。</div>'; return; }
   const token = ++mcToken;
   const blocks = compare ? [1, 20, 60, 120, 250] : [state.mcBlock];
@@ -684,6 +878,66 @@ async function runMC(compare) {
   mcLast = { key: mcKey(compare), compare, out, n, years: state.mcYears, block: state.mcBlock };
   $('status').textContent = `模擬 ${out.length * n} 條，${(Math.round(performance.now() - t0) / 1000).toFixed(1)} 秒`;
   compare ? renderMCCompare(mcLast) : renderMC(mcLast);
+}
+
+async function runRbMC(compare) {
+  let cfg;
+  try { cfg = rbCfg(); E.normWeights(cfg.weights); } catch (err) { $('results').innerHTML = `<div class="warn">${esc(err.message)}</div>`; return; }
+  const token = ++mcToken;
+  const blocks = compare ? [1, 20, 60, 120, 250] : [state.mcBlock];
+  const n = compare ? Math.min(state.mcN, 500) : state.mcN;
+  destroyCharts();
+  $('results').innerHTML = `<div class="card"><b>模擬中…</b><div class="progress"><i id="mcBar"></i></div><p class="hint" id="mcProg"></p></div>`;
+  $('mcRun').disabled = $('mcCompare').disabled = true;
+  const t0 = performance.now(), out = [];
+  try {
+    for (let j = 0; j < blocks.length; j++) {
+      const block = blocks[j];
+      const res = await E.rebalMonteCarlo(DATA, cfg, opts(), state.trendCustom, { n, years: state.mcYears, block, seed: state.mcSeed + block }, f => {
+        if (token !== mcToken) return false;
+        $('mcBar').style.width = `${((j + f) / blocks.length) * 100}%`;
+        $('mcProg').textContent = `每段${BLOCK_LABEL[block]} · ${Math.round(f * n)} / ${n}（每條同時算再平衡、不再平衡、0050 持有、00631L 均線）`;
+      });
+      if (!res || token !== mcToken) return;
+      out.push({ block, ...res });
+    }
+  } catch (err) { $('results').innerHTML = `<div class="warn">${esc(err.message)}</div>`; return; }
+  finally { $('mcRun').disabled = $('mcCompare').disabled = false; }
+  mcLast = { key: mcKey(compare), compare, rebal: true, cfg, out, n, years: state.mcYears, block: state.mcBlock };
+  $('status').textContent = `模擬 ${out.length * n} 條，${(Math.round(performance.now() - t0) / 1000).toFixed(1)} 秒`;
+  compare ? renderRbMCCompare(mcLast) : renderRbMC(mcLast);
+}
+const RB_MC_KEYS = [['main', 'cagr', 'mdd'], ['flat', 'flatCagr', 'flatMdd'], ['bh50', 'bhCagr', 'bhMdd'], ['tr631', 'trCagr', 'trMdd']];
+function renderRbMC(m) {
+  destroyCharts();
+  const o = m.out[0], rows = o.rows, n = rows.length;
+  const sets = RB_MC_KEYS.map(([k, c, d]) => ({ k, cagr: rows.map(r => r[c]), mdd: rows.map(r => r[d]) }));
+  const share = f => pct(rows.filter(f).length / n, 0);
+  const vs = RB_MC_KEYS.slice(1).map(([k, c, d]) => `${RB_ITEMS.find(x => x[0] === k)[1]}：報酬贏 <b>${share(r => r.cagr > r[c])}</b>、回撤小 <b>${share(r => r.mdd > r[d])}</b>`).join('<br>');
+  $('results').innerHTML = `<section class="card"><h3>${n.toLocaleString()} 條 ${m.years} 年模擬行情 · 每段${BLOCK_LABEL[m.block]}</h3>
+    <p class="hint">${esc(cfgLabel(m.cfg))} · 取樣 ${o.from}～${o.to}${state.useSyn ? '（含上市前模擬）' : '（只用真實資料）'}。模擬行情沒有日曆，「每季」用 63 個交易日近似。</p>
+    <p class="hint">策略 vs ${vs}</p>
+    ${rebalCompareTable(sets)}</section>
+    <section class="card"><h3>每一條模擬：0050 買進持有 vs 再平衡策略（年化報酬）</h3><div class="chart-box" id="cScatter"></div>
+    <p class="hint">虛線上方 = 那條行情再平衡策略賺得比 0050 買進持有多。</p></section>`;
+  const step = Math.max(1, Math.ceil(n / 2000));
+  charts.scatter = new ScatterChart($('cScatter'), {
+    series: [{ name: '再平衡', color: css('--text'), pts: rows.filter((_, i) => i % step === 0).map(r => ({ x: r.bhCagr * 100, y: r.cagr * 100, label: `0050 持有 ${(r.bhCagr * 100).toFixed(1)}%` })) }],
+    xNumeric: true, square: true, diagonal: true, xFmt: v => Math.round(v) + '%', yFmt: v => Math.round(v) + '%',
+    xLabel: '0050 持有年化 →', yLabel: '↑ 再平衡年化', tipFmt: v => (v > 0 ? '+' : '') + v.toFixed(1) + '%', ariaLabel: '散布圖',
+  });
+}
+function renderRbMCCompare(m) {
+  destroyCharts();
+  const pc = (rows, f) => pct(rows.filter(f).length / rows.length, 0);
+  const q = (a, p) => E.quantile([...a].sort((x, y) => x - y), p);
+  $('results').innerHTML = `<section class="card"><h3>各種區塊長度比較（每組 ${m.n.toLocaleString()} 條 ${m.years} 年）</h3>
+    <p class="hint">${esc(cfgLabel(m.cfg))}。每格上面是再平衡策略的年化中位數 / 回撤中位數，下面是報酬贏過對照組的機率。</p>
+    <div class="tbl-wrap"><table class="cmp-tbl"><thead><tr><th>每段</th><th>再平衡策略</th><th>vs 不再平衡</th><th>vs 0050 持有</th><th>vs 00631L 均線</th></tr></thead><tbody>
+    ${m.out.map(o => { const r = o.rows; return `<tr><td class="lbl">${BLOCK_LABEL[o.block]}</td>
+      <td class="n pair"><b>${pct(q(r.map(x => x.cagr), .5), 1, true)}</b><small>${pct(q(r.map(x => x.mdd), .5), 0)}</small></td>
+      ${[['flatCagr', 'flatMdd'], ['bhCagr', 'bhMdd'], ['trCagr', 'trMdd']].map(([c, d]) => `<td class="n pair"><b>${pc(r, x => x.cagr > x[c])}</b><small>回撤小 ${pc(r, x => x.mdd > x[d])}</small></td>`).join('')}</tr>`; }).join('')}
+    </tbody></table></div></section>`;
 }
 
 function renderMC(m) {

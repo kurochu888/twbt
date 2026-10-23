@@ -585,3 +585,219 @@ export function mcSummary(rows) {
     trades: rows.reduce((a, r) => a + r.trades, 0) / n,
   };
 }
+
+// ====================== 再平衡策略 ======================
+// 跟 twbt/backtest/rebalance.py 逐行對應。cfg = {weights: {code: w, CASH: w}, freq: 'none'|'M'|'Q'|'H'|'Y', band, cashRate, trend}
+export const REBAL_ASSETS = ['0050', '00631L', '00675L'];
+const LEVERAGED = new Set(['00631L', '00675L']);
+export const EXPOSURE = { '0050': 1, '00631L': 2, '00675L': 2, CASH: 0 };
+
+export function normWeights(weights) {
+  const w = Object.fromEntries(Object.entries(weights).filter(([, v]) => v > 0));
+  const s = Object.values(w).reduce((a, b) => a + b, 0);
+  if (!(s > 0)) throw new Error('配置比例加總要大於 0');
+  for (const k in w) w[k] /= s;
+  return w;
+}
+export const exposureOf = weights => Object.entries(normWeights(weights)).reduce((a, [k, v]) => a + EXPOSURE[k] * v, 0);
+
+function periodKey(day, freq) {
+  const t = new Date(day * DAY_MS), y = t.getUTCFullYear(), m = t.getUTCMonth() + 1;
+  if (freq === 'M') return y * 12 + m;
+  if (freq === 'Q') return y * 4 + Math.floor((m - 1) / 3);
+  if (freq === 'H') return y * 2 + Math.floor((m - 1) / 6);
+  if (freq === 'Y') return y;
+  return null;
+}
+
+function rebalCtx(data, cfg, opts, custom) {
+  const w = normWeights(cfg.weights);
+  const codes = Object.keys(w).filter(k => k !== 'CASH');
+  const R = Object.fromEntries(codes.map(c => [c, returnsFor(data, c, opts)]));
+  const preps = {};
+  let first = 0;
+  for (const c of codes) {
+    let f = -1;
+    for (let i = 0; i < R[c].length; i++) if (!Number.isNaN(R[c][i])) { f = i; break; }
+    if (f < 1) throw new Error(`${c} 沒有資料`);
+    first = Math.max(first, f - 1);
+    if (cfg.trend && LEVERAGED.has(c)) {
+      const p = trendParamsFor(c, custom);
+      preps[c] = { prep: trendPrep(data, c, opts, p), levels: p.pyramidLevels };
+      first = Math.max(first, preps[c].prep.minSi);
+    }
+  }
+  return { w, codes, R, preps, first };
+}
+
+function rebalSim(data, ctx, cfg, si, ei, opts, keepLog) {
+  const { w, codes, R, preps } = ctx;
+  const keyAt = ctx.keyAt ?? (t => periodKey(data.days[t], cfg.freq));
+  const cost = opts.cost ?? makeCost(), capital = opts.capital ?? 1_000_000, rate = cost.rate;
+  const cashD = (1 + (cfg.cashRate ?? 0)) ** (1 / TRADING_DAYS) - 1;
+  const h = Object.fromEntries(codes.map(c => [c, 0]));
+  let cash = capital, trades = 0;
+  const log = [];
+  const frac = (c, t) => {
+    const g = preps[c]; if (!g) return 1;
+    const j = t - g.prep.i0, st = g.prep.status[j], k = g.prep.layers[j];
+    return st === STATUS.HOLD ? 1 : (st === STATUS.WAIT && k > 0 ? k / g.levels : 0);
+  };
+  const target = t => {
+    const tw = {}; let s = 0;
+    for (const c of codes) { tw[c] = w[c] * frac(c, t); s += tw[c]; }
+    tw.CASH = 1 - s; return tw;
+  };
+  const kind = c => (ctx.kind ? ctx.kind[c] : data.assets[c].kind);
+  const sell = (c, amt) => { if (amt <= 0) return; cash += amt - cost.sell(amt, kind(c)); h[c] -= amt; trades++; };
+  const buy = (c, amt) => {
+    amt = Math.min(amt, cash); if (amt <= 0) return;
+    const fee = cost.buy(amt / (1 + rate), kind(c)), gross = amt - fee;
+    if (gross <= 0) return;
+    cash -= amt; h[c] += gross; trades++;
+  };
+  const total = () => { let v = cash; for (const c of codes) v += h[c]; return v; };
+  const tradeTo = (tw, only) => {
+    const V = total(), sel = only ? [only] : codes;
+    for (const c of sel) if (h[c] > tw[c] * V) sell(c, h[c] - tw[c] * V);
+    for (const c of sel) if (h[c] < tw[c] * V) buy(c, tw[c] * V - h[c]);
+  };
+  tradeTo(target(si));
+  const eq = new Float64Array(ei - si + 1);
+  eq[0] = total();
+  let lastKey = keyAt(si);
+  for (let t = si + 1; t <= ei; t++) {
+    for (const c of codes) h[c] *= 1 + R[c][t];
+    cash *= 1 + cashD;
+    const tw = target(t);
+    if (cfg.trend) for (const c of codes) {
+      const g = preps[c];
+      if (g && g.prep.act[t - g.prep.i0]) { tradeTo(tw, c); if (keepLog) log.push({ i: t, what: `${c} 均線訊號`, act: g.prep.act[t - g.prep.i0] }); }
+    }
+    const key = keyAt(t);
+    const check = (cfg.freq === 'none' && cfg.band > 0) || (key !== null && key !== lastKey);
+    lastKey = key;
+    if (check) {
+      const V = total();
+      let dev = Math.abs(cash / V - tw.CASH);
+      for (const c of codes) dev = Math.max(dev, Math.abs(h[c] / V - tw[c]));
+      if (!(cfg.band > 0) || dev > cfg.band + 1e-12) { tradeTo(tw); if (keepLog) log.push({ i: t, what: '再平衡' }); }
+    }
+    eq[t - si] = total();
+  }
+  for (const c of codes) if (h[c] > 0) eq[eq.length - 1] -= cost.sell(h[c], kind(c));
+  return { eq, trades, log };
+}
+
+export function rebalPeriod(data, cfg, startIso, endIso, opts, custom) {
+  const ctx = rebalCtx(data, cfg, opts, custom);
+  const b = bounds(data.days, isoToDay(startIso), isoToDay(endIso));
+  if (!b) return { error: '這段區間沒有足夠的交易日' };
+  let [si, ei] = b;
+  const shifted = si < ctx.first ? dayToIso(data.days[ctx.first]) : null;
+  si = Math.max(si, ctx.first);
+  if (si >= ei) return { error: `這個配置最早 ${dayToIso(data.days[ctx.first])} 才有資料` };
+  const dayIdx = data.days.subarray(si, ei + 1);
+  const main = rebalSim(data, ctx, cfg, si, ei, opts, true);
+  const flat = rebalSim(data, ctx, { ...cfg, freq: 'none', band: 0 }, si, ei, opts, false);
+  return { si, ei, dayIdx, shifted, main, flat, exposure: exposureOf(cfg.weights),
+    stats: summarize(main.eq, dayIdx), flatStats: summarize(flat.eq, dayIdx) };
+}
+
+export function rebalWindows(data, cfg, wins, opts, custom) {
+  const ctx = rebalCtx(data, cfg, opts, custom);
+  const flatCfg = { ...cfg, freq: 'none', band: 0 };
+  const capital = opts.capital ?? 1_000_000, rows = [];
+  for (const [s, e] of wins) {
+    const b = bounds(data.days, s, e);
+    if (!b) continue;
+    const [si, ei] = b;
+    if (si < ctx.first || ei - si < 20) continue;
+    const years = (data.days[ei] - data.days[si]) / 365.25;
+    const row = { start: dayToIso(data.days[si]), end: dayToIso(data.days[ei]), years };
+    for (const [name, c] of [['', cfg], ['flat', flatCfg]]) {
+      const { eq } = rebalSim(data, ctx, c, si, ei, opts, false);
+      const net = eq[eq.length - 1] / capital;
+      let peak = eq[0], mdd = 0;
+      for (const v of eq) { if (v > peak) peak = v; const d = v / peak - 1; if (d < mdd) mdd = d; }
+      row[name ? 'flatCagr' : 'cagr'] = net > 0 ? net ** (1 / years) - 1 : -1;
+      row[name ? 'flatMdd' : 'mdd'] = mdd;
+      row[name ? 'flatTotal' : 'total'] = net - 1;
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
+
+// ---------- 再平衡的蒙地卡羅：所有標的同一天一起抽樣（保留彼此的關聯） ----------
+// 模擬行情沒有日曆，「每月／每季／每半年／每年」用交易日數近似：21／63／126／252 天
+const FREQ_DAYS = { M: 21, Q: 63, H: 126, Y: 252 };
+
+export function rebalMcPath(data, cfg, opts, custom, idx, warm, years) {
+  const w = normWeights(cfg.weights);
+  const codes = Object.keys(w).filter(k => k !== 'CASH');
+  const need = new Set([...codes, '0050', '00631L']);           // 對照組要用到 0050、00631L
+  const src = {};
+  for (const c of need) src[c] = { r: returnsFor(data, c, opts), s: signalReturnsFor(data, c, opts) };
+  const n = idx.length + 1;
+  const R = {}, preps = {}, kind = {};
+  for (const c of need) {
+    const r = new Float64Array(n), spx = new Float64Array(n);
+    spx[0] = 1;
+    for (let j = 1; j < n; j++) { r[j] = src[c].r[idx[j - 1]]; spx[j] = spx[j - 1] * (1 + src[c].s[idx[j - 1]]); }
+    R[c] = r; kind[c] = data.assets[c].kind;
+    if (LEVERAGED.has(c)) {
+      const p = trendParamsFor(c, custom), sig = signals(spx, p);
+      preps[c] = { prep: { i0: 0, ...sig }, levels: p.pyramidLevels, p };
+    }
+  }
+  const fd = FREQ_DAYS[cfg.freq];
+  const mk = (cf, cs) => ({ w: normWeights(cf.weights), codes: cs, R, kind,
+    preps: cf.trend ? Object.fromEntries(cs.filter(c => preps[c]).map(c => [c, preps[c]])) : {},
+    keyAt: t => (fd ? Math.floor((t - warm) / fd) : null) });
+  const ei = n - 1, capital = opts.capital ?? 1_000_000;
+  const res = eq => {
+    let peak = eq[0], mdd = 0;
+    for (const v of eq) { if (v > peak) peak = v; const d = v / peak - 1; if (d < mdd) mdd = d; }
+    const net = eq[eq.length - 1] / capital;
+    return { cagr: net > 0 ? net ** (1 / years) - 1 : -1, mdd };
+  };
+  const main = res(rebalSim(data, mk(cfg, codes), cfg, warm, ei, opts, false).eq);
+  const flatCfg = { ...cfg, freq: 'none', band: 0 };
+  const flat = res(rebalSim(data, mk(flatCfg, codes), flatCfg, warm, ei, opts, false).eq);
+  const bhCfg = { weights: { '0050': 1 }, freq: 'none', band: 0, cashRate: 0, trend: false };
+  const bh = res(rebalSim(data, mk(bhCfg, ['0050']), bhCfg, warm, ei, opts, false).eq);
+  const trCfg = { weights: { '00631L': 1 }, freq: 'none', band: 0, cashRate: 0, trend: true };
+  const tr = res(rebalSim(data, mk(trCfg, ['00631L']), trCfg, warm, ei, opts, false).eq);
+  return { cagr: main.cagr, mdd: main.mdd, flatCagr: flat.cagr, flatMdd: flat.mdd,
+    bhCagr: bh.cagr, bhMdd: bh.mdd, trCagr: tr.cagr, trMdd: tr.mdd };
+}
+
+export async function rebalMonteCarlo(data, cfg, opts, custom, { n = 1000, years = 10, block = 120, seed = 1, chunk = 25 } = {}, onProgress) {
+  const w = normWeights(cfg.weights);
+  const codes = [...new Set([...Object.keys(w).filter(k => k !== 'CASH'), '0050', '00631L'])];
+  // 可抽樣的日子：每一檔都有資料
+  const rs = codes.map(c => [returnsFor(data, c, opts), signalReturnsFor(data, c, opts)]);
+  const ok = [];
+  for (let i = 0; i < data.days.length; i++) if (rs.every(([r, s]) => !Number.isNaN(r[i]) && !Number.isNaN(s[i]))) ok.push(i);
+  if (ok.length < 600) throw new Error('可抽樣的資料太少');
+  const warm = Math.max(...['00631L', '00675L'].map(c => { const p = trendParamsFor(c, custom); return Math.max(p.maFast, p.maSlow); })) - 1;
+  const len = warm + Math.round(years * TRADING_DAYS);
+  const rnd = mulberry32(seed), N = ok.length, prob = 1 / block;
+  const idx = new Int32Array(len), rows = [];
+  for (let k = 0; k < n; k++) {
+    let i = 0;
+    while (i < len) {
+      const start = Math.floor(rnd() * N), L = block <= 1 ? 1 : Math.min(geometric(rnd, prob), len - i);
+      for (let j = 0; j < L; j++) idx[i + j] = ok[(start + j) % N];
+      i += L;
+    }
+    rows.push(rebalMcPath(data, cfg, opts, custom, idx, warm, years));
+    if ((k + 1) % chunk === 0 && onProgress) {
+      if (onProgress((k + 1) / n) === false) return null;
+      await new Promise(res => setTimeout(res, 0));
+    }
+  }
+  return { rows, from: dayToIso(data.days[ok[0]]), to: dayToIso(data.days[ok[N - 1]]) };
+}

@@ -15,6 +15,7 @@
   --c-0050: #1d4ed8;
   --c-00631L: #d6336c;
   --c-00675L: #e8850c;
+  --c-alt: #7c3aed;
   --radius: 14px;
   --shadow: 0 1px 2px rgba(20, 20, 30, .05), 0 4px 16px rgba(20, 20, 30, .04);
   color-scheme: light;
@@ -24,7 +25,7 @@
     --bg: #16181d; --surface: #1f2228; --surface-2: #272a31; --text: #ecedef; --muted: #a1a4ab;
     --line: #33363e; --accent: #6b93ff; --accent-ink: #0d1530; --pos: #ff6b6b; --neg: #3ecf8e;
     --warn-bg: #3a3017; --warn-ink: #f3d58b;
-    --c-TAIEX: #a3a7b0; --c-0050: #6b93ff; --c-00631L: #ff6b9b; --c-00675L: #ffad4d;
+    --c-TAIEX: #a3a7b0; --c-0050: #6b93ff; --c-00631L: #ff6b9b; --c-00675L: #ffad4d; --c-alt: #b794f6;
     --shadow: none; color-scheme: dark;
   }
 }
@@ -32,11 +33,12 @@
   --bg: #16181d; --surface: #1f2228; --surface-2: #272a31; --text: #ecedef; --muted: #a1a4ab;
   --line: #33363e; --accent: #6b93ff; --accent-ink: #0d1530; --pos: #ff6b6b; --neg: #3ecf8e;
   --warn-bg: #3a3017; --warn-ink: #f3d58b;
-  --c-TAIEX: #a3a7b0; --c-0050: #6b93ff; --c-00631L: #ff6b9b; --c-00675L: #ffad4d;
+  --c-TAIEX: #a3a7b0; --c-0050: #6b93ff; --c-00631L: #ff6b9b; --c-00675L: #ffad4d; --c-alt: #b794f6;
   --shadow: none; color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0; background: var(--bg); color: var(--text);
@@ -251,4 +253,20 @@ td.pair small { color: var(--muted); display: block; font-size: 11.5px; }
   .tabs button { font-size: 13px; padding: 9px 2px; }
   .kpis { grid-template-columns: 1fr 1fr; }
   .kpi .v { font-size: 19px; }
+}
+
+/* 再平衡 */
+.seg.wide { grid-template-columns: repeat(3, 1fr); }
+.weights { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0 10px; margin-top: 12px; }
+.weights .field input { text-align: right; }
+.cmp-tbl td, .cmp-tbl th { padding: 7px 6px; }
+.cmp-tbl td:first-child { white-space: normal; min-width: 110px; }
+.cmp-tbl tr.main td { font-weight: 500; }
+.cmp-tbl .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 6px; vertical-align: 1px; }
+@media (max-width: 560px) {
+  .seg.wide button { font-size: 13px; padding: 9px 2px; }
+  .weights { grid-template-columns: 1fr 1fr; }
+  .cmp-tbl td, .cmp-tbl th { padding: 6px 3px; font-size: 12px; }
+  .cmp-tbl td:first-child { min-width: 84px; }
+  .cmp-tbl .tot { display: none; }
 }
