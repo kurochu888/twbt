@@ -23,6 +23,7 @@ class BuyHold:
                  capital: float = 1_000_000, cost: TaiwanCost | None = None, rf: float = 0.0,
                  tw50_excess: bool = True):
         self.rets, self.syn = load_returns(data_dir, use_synthetic, tw50_excess)
+        self.data_dir, self.tw50_excess = data_dir, tw50_excess
         self.capital = capital
         self.cost = cost or TaiwanCost()
         self.rf = rf
@@ -122,6 +123,9 @@ class BuyHold:
 
     def random(self, n: int, years, assets=None, seed: int | None = 42,
                first=None, last=None) -> pd.DataFrame:
+        return self.windows(self.random_windows(n, years, seed, first, last), assets)
+
+    def random_windows(self, n: int, years, seed: int | None = 42, first=None, last=None) -> list:
         """隨機區間：起點隨機；years 可以是固定值（例如 10）或範圍（例如 (5, 15)）。
 
         seed 固定時結果可以重現；seed=None 每次都不同。
@@ -143,7 +147,7 @@ class BuyHold:
             wins.append((s, s + length))
             if len(wins) >= n:
                 break
-        return self.windows(wins, assets)
+        return wins
 
 
 def describe(results: pd.DataFrame, col: str = "年化報酬") -> pd.DataFrame:

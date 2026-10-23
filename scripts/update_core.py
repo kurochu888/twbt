@@ -108,7 +108,15 @@ def build_long(store: PriceStore, out_dir: Path, real: dict) -> None:
         r50 = real["0050"]
         gap = syn.annualized_gap(r50["ret"], mkt_ret)
         s50 = syn.shift_return(mkt_ret, gap)
-        syn.splice(r50, s50).to_csv(long_dir / "0050_long.csv", float_format="%.10g")
+        long50 = syn.splice(r50, s50)
+        # 不含配息的價格報酬（均線策略的訊號用，跟 finance-app 一樣看「只還原分割」的價格）：
+        # 上市後用真實的 price_ret，上市前用模擬報酬扣掉估計股息
+        pr = syn.shift_return(s50, -info["股息估計（年化）"]).reindex(long50.index)
+        real_pr = r50["price_ret"].astype(float)
+        real_pr.index = pd.DatetimeIndex(real_pr.index).astype("datetime64[ns]")
+        pr.loc[real_pr.dropna().index] = real_pr.dropna()
+        long50["price_ret"] = pr
+        long50.to_csv(long_dir / "0050_long.csv", float_format="%.10g")
         params["gap_0050"] = gap
         lines.append(f"0050 模擬：大盤含息報酬 {gap:+.2%}/年")
         lines.append("  " + report("0050", r50["ret"], s50))

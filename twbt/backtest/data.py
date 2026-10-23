@@ -54,3 +54,32 @@ def load_returns(data_dir: str | Path, use_synthetic: bool = True,
     r.index = pd.DatetimeIndex(r.index).astype("datetime64[ns]")
     s.index = r.index
     return r, s
+
+
+def load_signal_inputs(data_dir: str | Path, rets: pd.DataFrame, syn: pd.DataFrame,
+                       tw50_excess: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """均線策略的訊號輸入：(不含配息的價格報酬, 當天有沒有交易)。
+
+    - 價格報酬：0050 用 0050_long.csv 的 price_ret（只還原分割，跟 finance-app 一樣）；
+      其他標的不配息，就是總報酬本身。tw50_excess=False 時 0050 上市前改用「大盤 − 估計股息」。
+    - 有沒有交易：該標的長期序列裡有沒有這一天（分割暫停交易的日子沒有），均線不算這幾天。
+    """
+    d = Path(data_dir) / "long"
+    price = rets.copy()
+    traded = pd.DataFrame(True, index=rets.index, columns=rets.columns)
+    for code in ASSETS[1:]:
+        x = pd.read_csv(d / f"{code}_long.csv", index_col=0, parse_dates=True)
+        x.index = pd.DatetimeIndex(x.index).astype("datetime64[ns]")
+        traded[code] = rets.index.isin(x.index)
+        if "price_ret" in x:
+            pr = x["price_ret"].reindex(rets.index)
+            if not tw50_excess and code == "0050":
+                dy = json.loads((d / "params.json").read_text(encoding="utf-8"))["dividend_yield"]
+                pre = syn[code] == 1
+                pr[pre] = np.expm1(np.log1p(rets.loc[pre, code]) - dy / 252)
+            price[code] = pr.where(rets[code].notna())
+    first = {c: rets[c].first_valid_index() for c in rets}
+    for c in price:
+        if first[c] is not None:
+            price.loc[first[c]:, c] = price.loc[first[c]:, c].fillna(0.0)
+    return price, traded

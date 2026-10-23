@@ -207,3 +207,32 @@ details.more summary { cursor: pointer; color: var(--accent); font-size: 13.5px;
 .tip b { margin-left: auto; padding-left: 10px; font-family: "IBM Plex Mono", ui-monospace, monospace; font-weight: 500; }
 .tip i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .tip .tip-h { color: var(--muted); font-size: 11.5px; }
+
+/* 策略 */
+.seg.wide { display: grid; grid-template-columns: 1fr 1fr; width: 100%; padding: 3px; border-radius: 11px; }
+.seg.wide button { font-size: 14.5px; padding: 9px 6px; min-height: 40px; border-radius: 8px; }
+.rules summary { cursor: pointer; color: var(--accent); font-size: 13.5px; }
+.rules ol { padding-left: 20px; font-size: 13.5px; color: var(--muted); margin: 8px 0; }
+.rules li { margin: 4px 0; }
+.params { display: grid; grid-template-columns: auto 1fr 1fr; gap: 6px 10px; align-items: center; margin-top: 12px; font-size: 13.5px; }
+.params .ph { font-size: 12.5px; color: var(--muted); font-weight: 500; }
+.params .pl { color: var(--muted); }
+.params input { min-height: 36px; padding: 6px 9px; }
+.params input.changed { border-color: var(--accent); }
+.cmp { display: grid; grid-template-columns: max-content 1fr 1fr; gap: 3px 8px; margin-top: 10px; font-size: 13px; }
+.cmp > span { white-space: nowrap; }
+.cmp .h { color: var(--muted); font-size: 11.5px; text-align: right; }
+.cmp .k { color: var(--muted); }
+.cmp .v { text-align: right; font-family: "IBM Plex Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+.cmp .v.bh { color: var(--muted); }
+.acard .vs { font-size: 12px; color: var(--muted); }
+td.pair b { font-weight: 500; display: block; }
+td.pair small { color: var(--muted); display: block; font-size: 11.5px; }
+.ev { font-size: 13px; }
+.ev td { padding: 5px 6px; }
+.chip[disabled] { opacity: .35; cursor: not-allowed; }
+@media (max-width: 560px) {
+  .cmp { font-size: 11.5px; gap: 2px 4px; }
+  .acard { min-width: 0; }
+  .params { grid-template-columns: auto 1fr 1fr; gap: 5px 6px; }
+}

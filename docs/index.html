@@ -17,13 +17,20 @@
 <header class="top">
   <div class="wrap">
     <h1>台股回測</h1>
-    <p class="sub">買進持有 · <span id="updated">載入資料中…</span></p>
+    <p class="sub"><span id="stratName">買進持有</span> · <span id="updated">載入資料中…</span></p>
   </div>
 </header>
 
 <main class="wrap">
   <section class="card" aria-labelledby="h-settings">
     <h2 id="h-settings">設定</h2>
+    <div class="field">
+      <span class="label">策略</span>
+      <div class="seg wide" id="strategySeg">
+        <button type="button" data-s="bh" aria-pressed="true">買進持有</button>
+        <button type="button" data-s="trend" aria-pressed="false">均線趨勢（接刀）</button>
+      </div>
+    </div>
     <div class="field">
       <span class="label">標的</span>
       <div class="chips" id="assets"></div>
@@ -55,6 +62,31 @@
       <span class="track" aria-hidden="true"></span>
       <span><b>模擬段：台灣50 每年贏大盤 <span id="gapText">1.4%</span></b><small>這是 2010 年後的實測差距，主要來自台積電；關掉 = 保守情境，假設上市前和大盤一樣</small></span>
     </label>
+  </section>
+
+  <section class="card" id="trendCard" hidden aria-labelledby="h-trend">
+    <h2 id="h-trend">均線趨勢策略</h2>
+    <details class="rules">
+      <summary>規則（照 finance-app 的訊號）</summary>
+      <ol>
+        <li><b>續抱</b>：全部投入。收盤跌破「快線 × 出場乘數」→ 全部賣出（出場），轉成接刀中。</li>
+        <li><b>接刀中</b>：收盤比「基準價、慢線」較低的那個再低「接刀間距」→ 加碼一層，每層 = 出場時的現金 ÷ 層數；基準價 = 上一次動作那天的收盤。</li>
+        <li><b>轉回續抱</b>：收盤站上快線、前一天也在快線上、快線斜率 ≥ 轉回斜率門檻；或收盤 > 快線 × 強反彈倍數 → 剩下的現金全部買進。</li>
+        <li>資料一開始還沒進場（觀望），第一次轉回續抱或接刀時才買。回測區間從中間開始時，照當時的狀態建立部位（續抱 = 全買、接刀已接 k 層 = 買 k ÷ 層數）。</li>
+        <li>當天收盤成交（台股盤後定價交易用收盤價）。每檔標的各自一筆錢，彼此不影響。大盤是指數不能交易，不跑策略。</li>
+      </ol>
+    </details>
+    <div class="params" id="params"></div>
+    <div class="row" style="margin-top:6px">
+      <label class="field grow"><span class="label">均線看的價格</span>
+        <select id="signalPrice">
+          <option value="raw">不還原配息（跟 finance-app 一樣）</option>
+          <option value="adjusted">還原權息</option>
+        </select>
+      </label>
+      <button class="btn" id="resetParams" type="button">恢復預設</button>
+    </div>
+    <p class="hint">只影響 0050：除息那天股價下跌，均線看得到。損益一律含配息。</p>
   </section>
 
   <nav class="tabs" role="tablist" aria-label="回測方式">

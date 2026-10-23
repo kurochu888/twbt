@@ -127,6 +127,20 @@ export class LineChart extends Base {
         el('polyline', { points: pts.join(' '), fill: 'none', stroke: s.color, 'stroke-width': o.width ?? 1.7,
           'stroke-linejoin': 'round', 'stroke-dasharray': k ? '5 4' : 'none' }, g);
     }
+    // 事件標記：{x, y, color, shape: 'down' | 'up' | 'dot'}
+    if (o.markers?.length) {
+      const gm = el('g', { class: 'markers' }, g);
+      for (const mk of o.markers) {
+        if (!Number.isFinite(mk.y) || (o.log && mk.y <= 0) || mk.x < x0 || mk.x > x1) continue;
+        const cx = X(mk.x), cy = Y(mk.y), r = 4.5;
+        const attrs = { fill: mk.color, stroke: 'var(--surface)', 'stroke-width': 1.2 };
+        if (mk.shape === 'dot') el('circle', { cx, cy, r: 3.6, ...attrs }, gm);
+        else {
+          const d = mk.shape === 'down' ? 1 : -1, oy = cy - d * 7;   // 三角形畫在線的上方（出場）或下方（接刀）
+          el('path', { d: `M${cx - r},${oy - d * r} L${cx + r},${oy - d * r} L${cx},${oy + d * r * 0.9} Z`, ...attrs }, gm);
+        }
+      }
+    }
     this.cursor = el('g', { visibility: 'hidden' }, this.svg);
     el('line', { y1: f.m.t, y2: f.m.t + f.ih, class: 'cur' }, this.cursor);
     this.dots = S.map(s => el('circle', { r: 3.5, fill: s.color, stroke: 'var(--surface)', 'stroke-width': 1.5 }, this.cursor));
@@ -155,7 +169,9 @@ export class LineChart extends Base {
     const line = this.cursor.querySelector('line');
     line.setAttribute('x1', cx); line.setAttribute('x2', cx);
     this.cursor.setAttribute('visibility', 'visible');
-    this.showTip(`<div class="tip-h">${new Date(this.tipDate).toISOString().slice(0, 10)}</div>${rows.join('')}`, px, py);
+    const iso = new Date(this.tipDate).toISOString().slice(0, 10);
+    const note = this.opts.tipNote?.(iso);
+    this.showTip(`<div class="tip-h">${iso}</div>${rows.join('')}${note ? `<div class="tip-h">${note}</div>` : ''}`, px, py);
   }
 }
 

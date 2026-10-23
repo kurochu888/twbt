@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .backtest.data import KIND, NAMES, load_returns
+from .backtest.data import KIND, NAMES, load_returns, load_signal_inputs
 
 SCALE = 1e10
 
@@ -36,6 +36,8 @@ def export_web(adjusted_dir: Path, out_dir: Path) -> str:
     has_params = params_path.exists()
     rc = load_returns(adjusted_dir, use_synthetic=True, tw50_excess=False)[0] if has_params else r
     idx = r.index
+    sig, traded = load_signal_inputs(adjusted_dir, r, syn, True)
+    sig_c = load_signal_inputs(adjusted_dir, rc, syn, False)[0] if has_params else sig
     assets = {}
     for code in r.columns:
         # first / first_real：可以當「買進日」的最早位置（之後每天都有報酬）
@@ -46,6 +48,14 @@ def export_web(adjusted_dir: Path, out_dir: Path) -> str:
              "ret": _encode(r[code])}
         if not np.allclose(rc[code].fillna(0), r[code].fillna(0)):
             a["ret_conservative"] = _encode(rc[code])
+        # 均線策略的訊號價格（不含配息）；跟總報酬一樣就不重複存
+        if not np.allclose(sig[code].fillna(0), r[code].fillna(0)):
+            a["sig_ret"] = _encode(sig[code])
+            if not np.allclose(sig_c[code].fillna(0), sig[code].fillna(0)):
+                a["sig_ret_conservative"] = _encode(sig_c[code])
+        # 序列開始之後、沒有交易的日子（分割暫停交易），均線不算這幾天
+        halt = np.flatnonzero(~traded[code].to_numpy())
+        a["halt"] = [int(i) for i in halt if i > first]
         assets[code] = a
     cal = adjusted_dir / "long" / "calibration.txt"
     data = {

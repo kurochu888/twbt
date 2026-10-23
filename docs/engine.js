@@ -32,6 +32,9 @@ export function prepare(json) {
     assets[code] = {
       code, name: a.name, kind: a.kind, first: a.first, firstReal: a.first_real,
       ret: dec(a.ret), retConservative: a.ret_conservative ? dec(a.ret_conservative) : null,
+      sigRet: a.sig_ret ? dec(a.sig_ret) : null,
+      sigRetConservative: a.sig_ret_conservative ? dec(a.sig_ret_conservative) : null,
+      halt: new Set(a.halt || []),
     };
   }
   return { days, assets, updated: json.updated, calibration: json.calibration, params: json.params };
@@ -59,6 +62,7 @@ export const TAX = { stock: 0.003, etf: 0.001, index: 0 };
 export function makeCost({ commission = 0.001425, discount = 1, minFee = 20, tax = TAX } = {}) {
   const fee = (amt, kind) => (kind === 'index' || amt <= 0) ? 0 : Math.max(amt * commission * discount, minFee);
   return {
+    rate: commission * discount,
     buy: (amt, kind) => fee(amt, kind),
     sell: (amt, kind) => fee(amt, kind) + amt * (tax[kind] ?? 0),
   };
@@ -202,14 +206,17 @@ export function windows(data, codes, wins, opts) {
   return rows;
 }
 
-export function rolling(data, codes, years, opts) {
+export function rollingWins(data, years) {
   const L = Math.round(years * 12);
   const first = data.days[0], last = data.days[data.days.length - 1];
   const t = new Date(first * DAY_MS);
   let s = Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), 1) / DAY_MS;
   const wins = [];
   while (addMonths(s, L) <= last) { wins.push([s, addMonths(s, L)]); s = addMonths(s, 1); }
-  return windows(data, codes, wins, opts);
+  return wins;
+}
+export function rolling(data, codes, years, opts) {
+  return windows(data, codes, rollingWins(data, years), opts);
 }
 
 export function mulberry32(seed) {          // 可重現的亂數
@@ -224,6 +231,9 @@ export function mulberry32(seed) {          // 可重現的亂數
 }
 
 export function randomWindows(data, codes, n, yearsMin, yearsMax, seed, opts) {
+  return windows(data, codes, randomWins(data, n, yearsMin, yearsMax, seed), opts);
+}
+export function randomWins(data, n, yearsMin, yearsMax, seed) {
   const rnd = mulberry32(seed);
   const first = data.days[0], last = data.days[data.days.length - 1];
   const wins = [];
@@ -234,7 +244,7 @@ export function randomWindows(data, codes, n, yearsMin, yearsMax, seed, opts) {
     const s = first + Math.floor(rnd() * (latest - first + 1));
     wins.push([s, addMonths(s, L)]);
   }
-  return windows(data, codes, wins, opts);
+  return wins;
 }
 
 // ---------- 分布摘要 ----------
@@ -280,4 +290,206 @@ export function winRate(rows, a, b, col = 'cagr') {
     n++; if (r[col] > mb.get(key(r))) win++;
   }
   return n ? win / n : NaN;
+}
+
+
+// ====================== 均線趨勢策略（接刀版） ======================
+// 規則照 kurochu888/finance-app 的 computeTrend()/runBacktest()，跟 twbt/backtest/trend.py 逐行對應。
+export const LEVERAGE = { TAIEX: 1, '0050': 1, '00631L': 2, '00675L': 2 };
+export const TREND_DEFAULTS = {
+  2: { maFast: 120, maSlow: 240, exitBuffer: 0.90, recoverSlope: 1.002, recoverStrong: 1.03, pyramidGap: 0.15, pyramidLevels: 2 },
+  1: { maFast: 100, maSlow: 200, exitBuffer: 0.95, recoverSlope: 1.002, recoverStrong: 1.03, pyramidGap: 0.15, pyramidLevels: 1 },
+};
+export const ACT = { NONE: 0, RECOVER: 1, ADD: 2, EXIT: 3 };
+export const STATUS = { WATCH: 0, HOLD: 1, WAIT: 2 };
+export const STATUS_NAME = ['觀望', '續抱', '接刀中'];
+
+function sma(x, w) {
+  const out = new Float64Array(x.length).fill(NaN);
+  let s = 0;
+  for (let i = 0; i < x.length; i++) {
+    s += x[i];
+    if (i >= w) s -= x[i - w];
+    if (i >= w - 1) out[i] = s / w;
+  }
+  return out;
+}
+
+export function signals(close, p) {
+  const n = close.length;
+  const act = new Int8Array(n), status = new Int8Array(n), layers = new Int8Array(n);
+  const win = Math.max(p.maFast, p.maSlow);
+  if (n < win + 1) return { act, status, layers };
+  const maf = sma(close, p.maFast), mas = sma(close, p.maSlow);
+  let st = STATUS.WATCH, base = 0, cnt = 0;
+  for (let i = win; i < n; i++) {
+    const c = close[i], f = maf[i], s = mas[i], fy = maf[i - 1];
+    let a = ACT.NONE;
+    if (st === STATUS.HOLD) {
+      if (c < f * p.exitBuffer) a = ACT.EXIT;
+    } else {
+      const stable = c > f && close[i - 1] > maf[i - 1];
+      const slope = f >= fy * p.recoverSlope;
+      const strong = c > f * p.recoverStrong;
+      const ref = Math.min(base > 0 ? base : close[i - 1], s);
+      if ((stable && slope) || strong) a = ACT.RECOVER;
+      else if (c < ref * (1 - p.pyramidGap) && cnt < p.pyramidLevels) a = ACT.ADD;
+    }
+    if (a === ACT.RECOVER) { base = c; cnt = 0; st = STATUS.HOLD; }
+    else if (a === ACT.ADD) { base = c; cnt += 1; st = STATUS.WAIT; }
+    else if (a === ACT.EXIT) { base = c; cnt = 0; st = STATUS.WAIT; }
+    act[i] = a; status[i] = st; layers[i] = cnt;
+  }
+  return { act, status, layers };
+}
+
+// 訊號用的價格報酬：預設「只還原分割、不含配息」（跟 app 一樣）；signalPrice='adjusted' 用總報酬
+function signalReturnsFor(data, code, opts) {
+  const a = data.assets[code];
+  if (opts.signalPrice === 'adjusted' || !a.sigRet) return returnsFor(data, code, opts);
+  let r = (opts.tw50Excess === false && a.sigRetConservative) ? a.sigRetConservative : a.sigRet;
+  if (opts.useSynthetic === false && a.firstReal !== null) {
+    r = Float64Array.from(r);
+    for (let i = 0; i <= a.firstReal; i++) r[i] = NaN;
+  }
+  return r;
+}
+
+const prepCache = new Map();
+export function trendPrep(data, code, opts, p) {
+  const key = [code, opts.useSynthetic !== false, opts.tw50Excess !== false, opts.signalPrice || 'raw', JSON.stringify(p)].join('|');
+  if (prepCache.has(key)) return prepCache.get(key);
+  const r = returnsFor(data, code, opts), sr = signalReturnsFor(data, code, opts);
+  let first = -1;
+  for (let i = 0; i < r.length; i++) if (!Number.isNaN(r[i])) { first = i; break; }
+  if (first < 1) { prepCache.set(key, null); return null; }
+  const i0 = first - 1, n = r.length - i0;
+  const price = new Float64Array(n), spx = new Float64Array(n);
+  price[0] = spx[0] = 1;
+  for (let j = 1; j < n; j++) {
+    price[j] = price[j - 1] * (1 + r[i0 + j]);
+    spx[j] = spx[j - 1] * (1 + (Number.isNaN(sr[i0 + j]) ? 0 : sr[i0 + j]));
+  }
+  const halt = data.assets[code].halt, pos = [];
+  for (let j = 0; j < n; j++) if (j === 0 || !halt.has(i0 + j)) pos.push(j);   // 暫停交易日不算進均線
+  const sig = signals(Float64Array.from(pos, j => spx[j]), p);
+  const act = new Int8Array(n), status = new Int8Array(n), layers = new Int8Array(n);
+  let k = 0;
+  for (let j = 0; j < n; j++) {
+    if (k + 1 < pos.length && pos[k + 1] === j) k++;
+    if (pos[k] === j) act[j] = sig.act[k];
+    status[j] = sig.status[k]; layers[j] = sig.layers[k];
+  }
+  const win = Math.max(p.maFast, p.maSlow);
+  const minSi = pos.length >= win ? i0 + pos[win - 1] : Infinity;   // 均線第一次算得出來的那天
+  const out = { i0, minSi, price, act, status, layers };
+  prepCache.set(key, out);
+  return out;
+}
+
+function trendSim(prep, p, kind, si, ei, opts, keepEvents) {
+  const { capital = 1_000_000, cost = makeCost() } = opts;
+  const rate = cost.rate;
+  const { i0, price, act, status, layers } = prep;
+  let cash = capital, units = 0;
+  const buy = (amount, px) => {
+    amount = Math.min(amount, cash);
+    if (amount <= 0) return;
+    const fee = cost.buy(amount / (1 + rate), kind);
+    const gross = amount - fee;
+    if (gross <= 0) return;
+    cash -= gross + fee; units += gross / px;
+  };
+  const sellAll = px => {
+    if (units <= 0) return;
+    const gross = units * px;
+    cash += gross - cost.sell(gross, kind); units = 0;
+  };
+  const j0 = si - i0, st0 = status[j0], k0 = layers[j0];
+  let cashAtExit = capital;
+  if (st0 === STATUS.HOLD) buy(cash, price[j0]);
+  else if (st0 === STATUS.WAIT && k0 > 0) buy(cashAtExit * k0 / p.pyramidLevels, price[j0]);
+  const eq = new Float64Array(ei - si + 1);
+  eq[0] = cash + units * price[j0];
+  const events = [];
+  let peak = eq[0], mdd = 0, inMarket = units > 0 ? 1 : 0;
+  for (let t = si + 1; t <= ei; t++) {
+    const j = t - i0, a = act[j], px = price[j];
+    if (a === ACT.RECOVER) buy(cash, px);
+    else if (a === ACT.ADD) buy(cashAtExit / p.pyramidLevels, px);
+    else if (a === ACT.EXIT) { sellAll(px); cashAtExit = cash; }
+    const v = cash + units * px;
+    if (a && keepEvents) events.push({ i: t, act: a, layer: layers[j], value: v });
+    eq[t - si] = v;
+    if (units > 0) inMarket++;
+  }
+  if (units > 0) {
+    const gross = units * price[ei - i0];
+    eq[eq.length - 1] = cash + gross - cost.sell(gross, kind);
+  }
+  for (const v of eq) { if (v > peak) peak = v; const d = v / peak - 1; if (d < mdd) mdd = d; }
+  return { eq, events, st0, k0, mdd, inMarket: inMarket / eq.length };
+}
+
+export function trendParamsFor(code, custom) {
+  const lev = LEVERAGE[code] >= 2 ? 2 : 1;
+  return { ...TREND_DEFAULTS[lev], ...(custom?.[lev] || {}) };
+}
+
+export function trendPeriod(data, codes, startIso, endIso, opts, custom) {
+  const results = [], skipped = [];
+  let anyBounds = false;
+  for (const code of codes.filter(c => c !== 'TAIEX')) {
+    const p = trendParamsFor(code, custom);
+    const prep = trendPrep(data, code, opts, p);
+    if (!prep || !Number.isFinite(prep.minSi)) { skipped.push({ code, name: data.assets[code].name, availableFrom: '－' }); continue; }
+    // 均線還算不出來的日子策略只能觀望，跟買進持有比不公平：兩者都從均線第一次算得出來的那天開始
+    const firstOk = dayToIso(data.days[prep.minSi]);
+    const s0 = startIso < firstOk ? firstOk : startIso;
+    const one = period(data, [code], s0, endIso, opts);
+    if (one.error) { if (s0 !== startIso) skipped.push({ code, name: data.assets[code].name, availableFrom: firstOk }); continue; }
+    anyBounds = true;
+    skipped.push(...one.skipped);
+    const r = one.results[0];
+    if (!r) continue;
+    const si = data.days.indexOf(r.dayIdx[0]), ei = si + r.dayIdx.length - 1;
+    const sim = trendSim(prep, p, data.assets[r.code].kind, si, ei, opts, true);
+    const st = summarize(sim.eq, r.dayIdx, opts.rf ?? 0);
+    st.syntheticShare = r.stats.syntheticShare; st.syntheticUntil = r.stats.syntheticUntil;
+    st.inMarket = sim.inMarket;
+    results.push({
+      ...r, bh: r.stats, stats: st, equity: sim.eq, bhEquity: r.equity, params: p,
+      shiftedFrom: s0 !== startIso ? firstOk : null,
+      startStatus: STATUS_NAME[sim.st0] + (sim.st0 === STATUS.WAIT ? `（已接 ${sim.k0} 層）` : ''),
+      events: sim.events.map(e => ({ ...e, date: dayToIso(data.days[e.i]) })),
+    });
+  }
+  if (!anyBounds && !results.length && !skipped.length) return { error: '這段區間沒有足夠的交易日' };
+  return { results, skipped };
+}
+
+export function trendWindows(data, codes, wins, opts, custom) {
+  codes = codes.filter(c => c !== 'TAIEX');
+  const bhRows = windows(data, codes, wins, opts);
+  const bhMap = new Map(bhRows.map(r => [r.code + '|' + r.start + '|' + r.end, r]));
+  const rows = [];
+  const preps = Object.fromEntries(codes.map(c => [c, trendPrep(data, c, opts, trendParamsFor(c, custom))]));
+  for (const [s, e] of wins) {
+    const b = bounds(data.days, s, e);
+    if (!b) continue;
+    const [si, ei] = b;
+    for (const c of codes) {
+      const bh = bhMap.get(c + '|' + dayToIso(data.days[si]) + '|' + dayToIso(data.days[ei]));
+      const prep = preps[c];
+      if (!bh || !prep || si < prep.minSi) continue;   // 均線還算不出來的起點不比
+      const sim = trendSim(prep, trendParamsFor(c, custom), data.assets[c].kind, si, ei, opts, false);
+      const net = sim.eq[sim.eq.length - 1] / (opts.capital ?? 1_000_000);
+      rows.push({
+        code: c, start: bh.start, end: bh.end, years: bh.years,
+        total: net - 1, cagr: net > 0 ? net ** (1 / bh.years) - 1 : -1, mdd: sim.mdd,
+        bhTotal: bh.total, bhCagr: bh.cagr, bhMdd: bh.mdd, syntheticShare: bh.syntheticShare,
+      });
+    }
+  }
+  return rows;
 }
