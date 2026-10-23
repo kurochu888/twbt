@@ -93,6 +93,7 @@
     <button role="tab" data-mode="period" aria-selected="true">自訂區間</button>
     <button role="tab" data-mode="rolling" aria-selected="false">滾動區間</button>
     <button role="tab" data-mode="random" aria-selected="false">隨機區間</button>
+    <button role="tab" data-mode="mc" aria-selected="false" id="mcTab" hidden>蒙地卡羅</button>
   </nav>
 
   <section class="card" id="panel-period" data-panel="period">
@@ -119,6 +120,29 @@
       <label class="field grow"><span class="label">亂數種子（相同種子 = 相同結果）</span><input id="rndSeed" type="number" step="1" value="42"></label>
       <button class="btn" id="reseed" type="button">換一組</button>
     </div>
+  </section>
+
+  <section class="card" id="panel-mc" data-panel="mc" hidden>
+    <p class="hint" style="margin:0 0 12px">把歷史上的每日報酬一段一段隨機拼接，造出很多「沒發生過、但性質相似」的行情，看策略贏買進持有有多穩。每條行情前面先讓均線累積，之後策略和買進持有同一天開始比。</p>
+    <div class="grid3">
+      <label class="field"><span class="label">模擬幾條</span><input id="mcN" type="number" min="100" max="5000" step="100" value="1000"></label>
+      <label class="field"><span class="label">每條幾年</span><input id="mcYears" type="number" min="1" max="30" step="1" value="10"></label>
+      <label class="field"><span class="label">亂數種子</span><input id="mcSeed" type="number" step="1" value="1"></label>
+    </div>
+    <label class="field"><span class="label">每段平均長度（越長越保留原本的趨勢）</span>
+      <select id="mcBlock">
+        <option value="1">1 天：每天完全打亂（沒有趨勢，當對照組）</option>
+        <option value="20">約 1 個月</option>
+        <option value="60">約 3 個月</option>
+        <option value="120" selected>約半年（建議）</option>
+        <option value="250">約 1 年</option>
+      </select>
+    </label>
+    <div class="row">
+      <button class="btn primary grow" id="mcRun" type="button">開始模擬</button>
+      <button class="btn" id="mcCompare" type="button">比較各種長度</button>
+    </div>
+    <p class="hint">取樣用的歷史跟著上面「使用上市前的模擬資料」：開著 = 1990 年起，關掉 = 只用上市後的真實資料（期間短，而且大多是多頭，結果會偏樂觀）。真實台股在 1～6 個月的尺度上有趨勢延續，「約 3 個月」到「約半年」最接近現實。</p>
   </section>
 
   <div id="status" class="status" role="status" aria-live="polite"></div>

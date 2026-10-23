@@ -14,7 +14,9 @@ const state = {
   start: '2000-01-01', end: '', rollYears: 10, rndN: 500, rndMin: 5, rndMax: 15, seed: 42,
   metric: 'cagr', log: true,
   strategy: 'bh', trendCustom: { 1: {}, 2: {} }, signalPrice: 'raw', chartAsset: '00631L',
+  mcN: 1000, mcYears: 10, mcSeed: 1, mcBlock: 120, mcMetric: 'cagr',
 };
+let mcLast = null, mcToken = 0;   // 上一次蒙地卡羅結果（設定一樣才顯示）、執行中的代號（換設定就作廢）
 const PARAM_FIELDS = [
   ['maFast', '快線（日）', 1, 2, 500],
   ['maSlow', '慢線（日）', 1, 2, 500],
@@ -133,6 +135,16 @@ function buildControls() {
   });
   syncStrategyUI();
 
+  // 蒙地卡羅：改設定不自動跑（比較久），按按鈕才跑
+  for (const [id, key, lo, hi] of [['mcN', 'mcN', 100, 5000], ['mcYears', 'mcYears', 1, 30], ['mcSeed', 'mcSeed', -1e9, 1e9]]) {
+    $(id).value = state[key];
+    $(id).addEventListener('input', () => { const v = Number($(id).value); if (Number.isFinite(v) && v >= lo && v <= hi) { state[key] = Math.round(v); save(); run(); } });
+  }
+  $('mcBlock').value = String(state.mcBlock);
+  $('mcBlock').addEventListener('change', () => { state.mcBlock = +$('mcBlock').value; save(); run(); });
+  $('mcRun').addEventListener('click', () => runMC(false));
+  $('mcCompare').addEventListener('click', () => runMC(true));
+
   document.querySelectorAll('.tabs button').forEach(b => b.addEventListener('click', () => {
     state.mode = b.dataset.mode; showMode(); changed();
   }));
@@ -164,6 +176,8 @@ function syncStrategyUI() {
   const trend = state.strategy === 'trend';
   $('stratName').textContent = trend ? '均線趨勢（接刀）' : '買進持有';
   $('strategySeg').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', b.dataset.s === state.strategy));
+  $('mcTab').hidden = !trend;
+  if (!trend && state.mode === 'mc') { state.mode = 'period'; showMode(); }
   $('trendCard').hidden = !trend;
   const chip = $('assets').querySelector('[data-code="TAIEX"]');
   if (chip) { chip.disabled = trend; chip.title = trend ? '大盤是指數不能交易，策略模式不列入' : ''; }
@@ -199,7 +213,7 @@ function run() {
       const rows = E.randomWindows(DATA, codes(), state.rndN, lo, hi, state.seed, opts());
       renderMulti(rows, `隨機 ${state.rndN} 個區間，長度 ${lo}～${hi} 年（種子 ${state.seed}）`);
     }
-    $('status').textContent = `計算 ${Math.round(performance.now() - t0)} 毫秒`;
+    if (!(state.strategy === 'trend' && state.mode === 'mc')) $('status').textContent = `計算 ${Math.round(performance.now() - t0)} 毫秒`;
   } catch (err) {
     $('results').innerHTML = `<div class="warn">${esc(err.message)}</div>`;
     $('status').textContent = '';
@@ -208,6 +222,7 @@ function run() {
 }
 
 function runTrend() {
+  if (state.mode === 'mc') { mcToken++; renderMCIdle(); return; }
   if (!codes().length) { destroyCharts(); $('results').innerHTML = '<div class="warn">請至少選一檔 0050、00631L 或 00675L（大盤不能交易，不跑策略）。</div>'; return; }
   if (state.mode === 'period') {
     renderTrendPeriod(E.trendPeriod(DATA, codes(), state.start, state.end, opts(), state.trendCustom));
@@ -624,6 +639,112 @@ function renderTrendMulti(rows, title) {
     })),
     yFmt: v => Math.round(v), tipFmt: v => (v > 0 ? '+' : '') + v.toFixed(1) + ' 點', ariaLabel: '策略減買進持有散布圖',
   });
+}
+
+// ---------- 蒙地卡羅 ----------
+const BLOCK_LABEL = { 1: '每天打亂', 20: '約 1 個月', 60: '約 3 個月', 120: '約半年', 250: '約 1 年' };
+function mcKey(compare) {
+  return JSON.stringify([compare, codes(), state.useSyn, state.excess, state.signalPrice, state.trendCustom, state.capital,
+    state.discount, state.mcN, state.mcYears, state.mcSeed, compare ? 0 : state.mcBlock]);
+}
+function renderMCIdle() {
+  destroyCharts();
+  $('status').textContent = '';
+  if (mcLast && mcLast.key === mcKey(mcLast.compare)) { mcLast.compare ? renderMCCompare(mcLast) : renderMC(mcLast); return; }
+  $('results').innerHTML = `<div class="card"><p class="hint" style="margin:0">設定好之後按「開始模擬」。${state.mcN} 條大約要 ${Math.max(1, Math.round(state.mcN * codes().length * state.mcYears / 12000))} 秒（手機會慢一點）。</p></div>`;
+}
+
+async function runMC(compare) {
+  if (!codes().length) { $('results').innerHTML = '<div class="warn">請至少選一檔 0050、00631L 或 00675L。</div>'; return; }
+  const token = ++mcToken;
+  const blocks = compare ? [1, 20, 60, 120, 250] : [state.mcBlock];
+  const n = compare ? Math.min(state.mcN, 1000) : state.mcN;
+  const jobs = blocks.flatMap(b => codes().map(c => [b, c]));
+  destroyCharts();
+  $('results').innerHTML = `<div class="card"><b>模擬中…</b><div class="progress"><i id="mcBar"></i></div><p class="hint" id="mcProg"></p></div>`;
+  $('mcRun').disabled = $('mcCompare').disabled = true;
+  const t0 = performance.now(), out = [];
+  try {
+    for (let j = 0; j < jobs.length; j++) {
+      const [block, code] = jobs[j];
+      const res = await E.monteCarlo(DATA, code, opts(), state.trendCustom,
+        { n, years: state.mcYears, block, seed: state.mcSeed + block }, f => {
+          if (token !== mcToken) return false;
+          $('mcBar').style.width = `${((j + f) / jobs.length) * 100}%`;
+          $('mcProg').textContent = `${SHORT[code]} · 每段${BLOCK_LABEL[block] ?? block + ' 天'} · ${Math.round(f * n)} / ${n}`;
+        });
+      if (!res || token !== mcToken) return;
+      out.push({ block, ...res });
+    }
+  } catch (err) {
+    $('results').innerHTML = `<div class="warn">${esc(err.message)}</div>`; return;
+  } finally {
+    $('mcRun').disabled = $('mcCompare').disabled = false;
+  }
+  mcLast = { key: mcKey(compare), compare, out, n, years: state.mcYears, block: state.mcBlock };
+  $('status').textContent = `模擬 ${out.length * n} 條，${(Math.round(performance.now() - t0) / 1000).toFixed(1)} 秒`;
+  compare ? renderMCCompare(mcLast) : renderMC(mcLast);
+}
+
+function renderMC(m) {
+  destroyCharts();
+  const { out, n, years, block } = m;
+  const list = out.map(o => o.code);
+  if (!list.includes(state.chartAsset)) state.chartAsset = list[0];
+  const sums = Object.fromEntries(out.map(o => [o.code, E.mcSummary(o.rows)]));
+  const src = out[0].source;
+  const metric = state.mcMetric;
+  const asRows = (o, bh) => o.rows.map(r => {
+    const c = bh ? r.bhCagr : r.cagr;
+    return { code: o.code, cagr: c, mdd: bh ? r.bhMdd : r.mdd, total: (1 + c) ** years - 1 };
+  });
+  let html = `<section class="card"><h3>${n.toLocaleString()} 條 ${years} 年模擬行情 · 每段${BLOCK_LABEL[block] ?? block + ' 天'}</h3>
+    <p class="hint">取樣歷史：${out.map(o => `${SHORT[o.code]} ${o.source.from}～${o.source.to}`).join('、')}${state.useSyn ? '（含上市前模擬）' : '（只用真實資料）'}。每條都扣手續費與證交稅。</p>
+    ${list.map(c => { const s = sums[c]; return `<div style="margin-top:14px"><b style="font-size:14px">${LABEL[c]}</b><div class="kpis">
+      <div class="kpi" style="--c:${color(c)}"><div class="t">策略報酬贏的機率</div><div class="v">${pct(s.win, 0)}</div><div class="s">${years} 年後年化報酬比較高</div></div>
+      <div class="kpi" style="--c:${color(c)}"><div class="t">年化多賺（中位數）</div><div class="v ${cls(s.diff50)}">${(s.diff50 * 100 > 0 ? '+' : '') + (s.diff50 * 100).toFixed(1)}</div><div class="s">百分點；5%～95%：${(s.diff5 * 100).toFixed(1)}～${(s.diff95 * 100).toFixed(1)}</div></div>
+      <div class="kpi" style="--c:${color(c)}"><div class="t">最大回撤比較小的機率</div><div class="v">${pct(s.mddBetter, 0)}</div><div class="s">平均每年進出 ${(s.trades / years).toFixed(1)} 次</div></div>
+      <div class="kpi" style="--c:${color(c)}"><div class="t">${years} 年後還虧錢的機率</div><div class="v">${pct(s.loss, 0)}</div><div class="s">買進持有 ${pct(s.bhLoss, 0)}</div></div>
+    </div></div>`; }).join('')}
+  </section>`;
+
+  const M = METRICS[metric];
+  const dS = Object.fromEntries(out.map(o => [o.code, E.describe(asRows(o, false), [o.code], metric)[o.code]]));
+  const dB = Object.fromEntries(out.map(o => [o.code, E.describe(asRows(o, true), [o.code], metric)[o.code]]));
+  html += `<section class="card"><div class="chart-head"><h3>分布</h3>
+      <div class="seg" id="mcMetricSeg">${['cagr', 'mdd'].map(k => `<button type="button" data-m="${k}" aria-pressed="${k === metric}">${METRICS[k].label}</button>`).join('')}</div></div>
+    ${rangeBars(list.flatMap(c => [{ label: `${SHORT[c]} 策略`, color: color(c), s: dS[c] }, { label: `${SHORT[c]} 買進持有`, color: css('--muted'), s: dB[c] }]), M)}
+  </section>`;
+
+  html += `<section class="card"><h3>每一條模擬：買進持有 vs 策略（年化報酬）</h3>
+    ${list.length > 1 ? `<div class="chips presets" id="chartAssetSeg" style="margin:4px 0 8px">${list.map(c => `<button class="chip" type="button" data-c="${c}" aria-pressed="${c === state.chartAsset}" style="color:var(--c-${c})"><span class="dot" style="background:var(--c-${c})"></span><span style="color:var(--text)">${SHORT[c]}</span></button>`).join('')}</div>` : ''}
+    <div class="chart-box" id="cScatter"></div>
+    <p class="hint">每個點是一條模擬行情。虛線上方 = 那條行情策略賺得比較多；越往左（買進持有很差的行情），策略通常越有幫助。</p></section>`;
+
+  $('results').innerHTML = html;
+  $('mcMetricSeg').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; state.mcMetric = b.dataset.m; save(); renderMC(m); });
+  $('chartAssetSeg')?.addEventListener('click', e => { const b = e.target.closest('.chip'); if (!b) return; state.chartAsset = b.dataset.c; save(); renderMC(m); });
+  const o = out.find(x => x.code === state.chartAsset);
+  const step = Math.max(1, Math.ceil(o.rows.length / 2000));
+  charts.scatter = new ScatterChart($('cScatter'), {
+    series: [{ name: SHORT[o.code], color: color(o.code), pts: o.rows.filter((_, i) => i % step === 0).map(r => ({ x: r.bhCagr * 100, y: r.cagr * 100, label: `買進持有 ${(r.bhCagr * 100).toFixed(1)}%` })) }],
+    xNumeric: true, square: true, diagonal: true, xFmt: v => Math.round(v) + '%', yFmt: v => Math.round(v) + '%',
+    xLabel: '買進持有年化 →', yLabel: '↑ 策略年化', tipFmt: v => (v > 0 ? '+' : '') + v.toFixed(1) + '%', ariaLabel: '策略與買進持有年化報酬散布圖',
+  });
+}
+
+function renderMCCompare(m) {
+  destroyCharts();
+  const { out, n, years } = m;
+  const list = [...new Set(out.map(o => o.code))];
+  const blocks = [...new Set(out.map(o => o.block))];
+  const cell = (b, c) => { const o = out.find(x => x.block === b && x.code === c); const s = E.mcSummary(o.rows);
+    return `<td class="n pair"><b>${pct(s.win, 0)}</b><small>${(s.diff50 > 0 ? '+' : '') + (s.diff50 * 100).toFixed(1)} 點 · 回撤小 ${pct(s.mddBetter, 0)}</small></td>`; };
+  $('results').innerHTML = `<section class="card"><h3>各種區塊長度比較（每組 ${n.toLocaleString()} 條 ${years} 年）</h3>
+    <p class="hint">每格上面是「策略報酬贏的機率」，下面是年化多賺的中位數與「最大回撤比較小的機率」。</p>
+    <div class="tbl-wrap"><table><thead><tr><th>每段平均長度</th>${list.map(c => `<th><span class="dot" style="background:${color(c)}"></span>${SHORT[c]}</th>`).join('')}</tr></thead>
+    <tbody>${blocks.map(b => `<tr><td class="lbl">${BLOCK_LABEL[b]}${b === 1 ? '<br><small>沒有趨勢（對照）</small>' : ''}</td>${list.map(c => cell(b, c)).join('')}</tr>`).join('')}</tbody></table></div>
+    <p class="hint" style="margin-top:10px">怎麼看：每天打亂時，行情裡沒有趨勢，策略的報酬優勢應該消失；區塊越長、保留越多趨勢，策略越容易贏。真實台股在 1～6 個月的尺度上有趨勢延續，「約 3 個月」到「約半年」那兩列最接近現實。回撤比較小這件事在每一列都成立，是這個策略最穩的好處。</p></section>`;
 }
 
 // ---------- 啟動 ----------

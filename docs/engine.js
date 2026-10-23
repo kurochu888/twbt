@@ -493,3 +493,95 @@ export function trendWindows(data, codes, wins, opts, custom) {
   }
   return rows;
 }
+
+// ====================== 蒙地卡羅（區塊自助抽樣） ======================
+// 跟 twbt/backtest/montecarlo.py 同一套：stationary block bootstrap 重組歷史日報酬，
+// 每條路徑先讓均線累積（觀望），之後 years 年比較策略與買進持有（同一天開始、都扣成本）。
+function geometric(rnd, p) {
+  if (p >= 1) return 1;
+  return Math.max(1, Math.ceil(Math.log(1 - rnd()) / Math.log(1 - p)));
+}
+
+export function mcSource(data, code, opts) {
+  const r = returnsFor(data, code, opts), s = signalReturnsFor(data, code, opts);
+  const rr = [], ss = [];
+  for (let i = 0; i < r.length; i++) if (!Number.isNaN(r[i]) && !Number.isNaN(s[i])) { rr.push(r[i]); ss.push(s[i]); }
+  let first = -1;
+  for (let i = 0; i < r.length; i++) if (!Number.isNaN(r[i])) { first = i; break; }
+  return { r: Float64Array.from(rr), s: Float64Array.from(ss), from: first > 0 ? dayToIso(data.days[first]) : '－', to: dayToIso(data.days[data.days.length - 1]) };
+}
+
+function mcPath(src, idx, p, warm, kind, cost, capital, years) {
+  const n = idx.length + 1;
+  const price = new Float64Array(n), spx = new Float64Array(n);
+  price[0] = spx[0] = 1;
+  for (let j = 1; j < n; j++) { price[j] = price[j - 1] * (1 + src.r[idx[j - 1]]); spx[j] = spx[j - 1] * (1 + src.s[idx[j - 1]]); }
+  const { act } = signals(spx, p);
+  const rate = cost.rate;
+  let cash = capital, units = 0, cashAtExit = capital, trades = 0;
+  const buy = (amount, px) => {
+    amount = Math.min(amount, cash); if (amount <= 0) return;
+    const fee = cost.buy(amount / (1 + rate), kind), gross = amount - fee;
+    if (gross <= 0) return;
+    cash -= gross + fee; units += gross / px;
+  };
+  let peak = capital, mdd = 0, v = capital;
+  for (let t = warm + 1; t < n; t++) {
+    const a = act[t], px = price[t];
+    if (a === ACT.RECOVER) { buy(cash, px); trades++; }
+    else if (a === ACT.ADD) { buy(cashAtExit / p.pyramidLevels, px); trades++; }
+    else if (a === ACT.EXIT) { if (units > 0) { const g = units * px; cash += g - cost.sell(g, kind); units = 0; } cashAtExit = cash; trades++; }
+    v = cash + units * px;
+    if (t === n - 1 && units > 0) { const g = units * px; v = cash + g - cost.sell(g, kind); }
+    if (v > peak) peak = v; else if (v / peak - 1 < mdd) mdd = v / peak - 1;
+  }
+  const inv = capital - cost.buy(capital, kind);
+  let bpeak = inv, bmdd = 0, bv = inv;
+  for (let t = warm + 1; t < n; t++) {
+    bv = inv * price[t] / price[warm];
+    if (t === n - 1) bv -= cost.sell(bv, kind);
+    if (bv > bpeak) bpeak = bv; else if (bv / bpeak - 1 < bmdd) bmdd = bv / bpeak - 1;
+  }
+  const cg = x => (x > 0 ? x ** (1 / years) - 1 : -1);
+  return { cagr: cg(v / capital), mdd, bhCagr: cg(bv / capital), bhMdd: bmdd, trades };
+}
+
+// 跑 n 條路徑；每 chunk 條讓出一次畫面（onProgress 回報進度，回傳 false 可中止）
+export async function monteCarlo(data, code, opts, custom, { n = 1000, years = 10, block = 120, seed = 1, chunk = 50 } = {}, onProgress) {
+  const src = mcSource(data, code, opts);
+  const p = trendParamsFor(code, custom);
+  const warm = Math.max(p.maFast, p.maSlow) - 1;
+  const len = warm + Math.round(years * TRADING_DAYS);
+  if (src.r.length < 2 * Math.max(p.maFast, p.maSlow)) throw new Error(`${code} 可抽樣的資料太少`);
+  const rnd = mulberry32(seed), N = src.r.length, prob = 1 / block;
+  const cost = opts.cost ?? makeCost(), capital = opts.capital ?? 1_000_000, kind = data.assets[code].kind;
+  const rows = [], idx = new Int32Array(len);
+  for (let k = 0; k < n; k++) {
+    let i = 0;
+    while (i < len) {
+      const start = Math.floor(rnd() * N), L = block <= 1 ? 1 : Math.min(geometric(rnd, prob), len - i);
+      for (let j = 0; j < L; j++) idx[i + j] = (start + j) % N;
+      i += L;
+    }
+    rows.push(mcPath(src, idx, p, warm, kind, cost, capital, years));
+    if ((k + 1) % chunk === 0 && onProgress) {
+      if (onProgress((k + 1) / n) === false) return null;
+      await new Promise(res => setTimeout(res, 0));
+    }
+  }
+  return { code, rows, source: src, params: p };
+}
+
+export function mcSummary(rows) {
+  const q = (arr, p) => quantile([...arr].sort((a, b) => a - b), p);
+  const d = rows.map(r => r.cagr - r.bhCagr);
+  const n = rows.length;
+  const share = f => rows.filter(f).length / n;
+  return {
+    n, win: d.filter(x => x > 0).length / n,
+    diff50: q(d, 0.5), diff5: q(d, 0.05), diff95: q(d, 0.95),
+    mddBetter: share(r => r.mdd > r.bhMdd),
+    loss: share(r => r.cagr < 0), bhLoss: share(r => r.bhCagr < 0),
+    trades: rows.reduce((a, r) => a + r.trades, 0) / n,
+  };
+}

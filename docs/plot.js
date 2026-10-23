@@ -185,12 +185,20 @@ export class ScatterChart extends Base {
     let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
     for (const p of all) { x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); }
     y0 = Math.min(y0, 0); y1 = Math.max(y1, 0);
+    if (o.square) { x0 = y0 = Math.min(x0, y0); x1 = y1 = Math.max(x1, y1); }   // 兩軸同刻度（畫對角線用）
     const pad = (y1 - y0) * 0.06 || 1; y0 -= pad; y1 += pad;
+    if (o.square) { x0 = y0; x1 = y1; }
     const X = t => f.m.l + ((t - x0) / (x1 - x0 || 1)) * f.iw;
     const Y = v => f.m.t + f.ih - ((v - y0) / (y1 - y0)) * f.ih;
-    const xt = yearTicks(x0, x1);
+    const xt = o.xNumeric ? { ticks: niceLinearTicks(x0, x1), fmt: o.xFmt || (v => v) } : yearTicks(x0, x1);
     const g = el('g', {}, this.svg);
     this.axes(g, f, niceLinearTicks(y0, y1), Y, o.yFmt, xt.ticks, X, xt.fmt, Y(0));
+    if (o.diagonal) {
+      const a = Math.max(x0, y0), b = Math.min(x1, y1);
+      el('line', { x1: X(a), y1: Y(a), x2: X(b), y2: Y(b), class: 'zero', 'stroke-dasharray': '4 3' }, g);
+    }
+    if (o.xLabel) { const t = el('text', { x: f.m.l + f.iw, y: f.m.t + f.ih - 6, class: 'tick', 'text-anchor': 'end' }, g); t.textContent = o.xLabel; }
+    if (o.yLabel) { const t = el('text', { x: f.m.l + 6, y: f.m.t + 12, class: 'tick' }, g); t.textContent = o.yLabel; }
     const r = all.length > 1500 ? 1.7 : 2.3;
     this.P = [];
     for (const s of o.series) {
