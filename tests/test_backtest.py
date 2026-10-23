@@ -26,11 +26,11 @@ def make_data(d: Path):
     for code, k in (("0050", 1), ("00631L", 2), ("00675L", 2)):
         r = r_mkt * k
         syn = (DATES < "2005-01-01").astype(int)
+        df = pd.DataFrame({"ret": r, "adj_close": 1.0, "is_synthetic": syn}, index=DATES).rename_axis("date")
         if code == "0050":
-            r = r.copy()
-            r[(DATES >= "2006-03-01") & (DATES < "2006-03-08")] = np.nan   # 分割暫停交易
-        pd.DataFrame({"ret": r, "adj_close": 1.0, "is_synthetic": syn},
-                     index=DATES).rename_axis("date").to_csv(d / f"long/{code}_long.csv")
+            # 分割暫停交易：實際資料裡這幾天根本沒有列
+            df = df[(df.index < "2006-03-01") | (df.index >= "2006-03-08")]
+        df.to_csv(d / f"long/{code}_long.csv")
 
 
 class TestBuyHold(unittest.TestCase):
@@ -70,6 +70,10 @@ class TestBuyHold(unittest.TestCase):
         bh = BuyHold(self.dir, cost=NO_COST)
         r = bh.rets.loc["2006-03-01":"2006-03-07", "0050"]
         self.assertTrue((r == 0).all())
+        self.assertTrue((bh.syn.loc["2006-03-01":"2006-03-07", "0050"] == 0).all())   # 不是模擬
+        self.assertEqual(bh.syn["0050"].iloc[0], 1)
+        real = BuyHold(self.dir, use_synthetic=False, cost=NO_COST)
+        self.assertTrue(np.isfinite(real.equity("0050", "2006-01-01", "2006-12-31").iloc[-1]))
         eq = bh.equity("0050", "2006-01-01", "2006-12-31")   # 不會因暫停交易而失敗
         self.assertTrue(np.isfinite(eq.iloc[-1]))
 

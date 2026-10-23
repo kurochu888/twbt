@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>台股回測</title>
+<meta name="description" content="大盤、0050、00631L、00675L 買進持有回測：自訂區間、滾動區間、隨機區間">
+<meta name="theme-color" content="#f6f5f1" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#16181d" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231d4ed8'/%3E%3Cpath d='M6 22l6-7 5 4 9-11' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <h1>台股回測</h1>
+    <p class="sub">買進持有 · <span id="updated">載入資料中…</span></p>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="card" aria-labelledby="h-settings">
+    <h2 id="h-settings">設定</h2>
+    <div class="field">
+      <span class="label">標的</span>
+      <div class="chips" id="assets"></div>
+    </div>
+    <div class="grid2">
+      <label class="field">
+        <span class="label">投入金額（元）</span>
+        <input id="capital" type="text" inputmode="numeric" value="1,000,000">
+      </label>
+      <label class="field">
+        <span class="label">手續費折扣</span>
+        <select id="discount">
+          <option value="1">不打折（0.1425%）</option>
+          <option value="0.6">6 折</option>
+          <option value="0.5">5 折</option>
+          <option value="0.38">3.8 折</option>
+          <option value="0.28">2.8 折</option>
+          <option value="0">免手續費</option>
+        </select>
+      </label>
+    </div>
+    <label class="switch">
+      <input id="useSyn" type="checkbox" checked>
+      <span class="track" aria-hidden="true"></span>
+      <span><b>使用上市前的模擬資料</b><small>關掉就只用真實資料，回測期間會變短</small></span>
+    </label>
+    <label class="switch" id="excessRow">
+      <input id="excess" type="checkbox" checked>
+      <span class="track" aria-hidden="true"></span>
+      <span><b>模擬段：台灣50 每年贏大盤 <span id="gapText">1.4%</span></b><small>這是 2010 年後的實測差距，主要來自台積電；關掉 = 保守情境，假設上市前和大盤一樣</small></span>
+    </label>
+  </section>
+
+  <nav class="tabs" role="tablist" aria-label="回測方式">
+    <button role="tab" data-mode="period" aria-selected="true">自訂區間</button>
+    <button role="tab" data-mode="rolling" aria-selected="false">滾動區間</button>
+    <button role="tab" data-mode="random" aria-selected="false">隨機區間</button>
+  </nav>
+
+  <section class="card" id="panel-period" data-panel="period">
+    <div class="grid2">
+      <label class="field"><span class="label">開始</span><input id="start" type="date" value="2000-01-01"></label>
+      <label class="field"><span class="label">結束</span><input id="end" type="date"></label>
+    </div>
+    <div class="chips presets" id="presets"></div>
+  </section>
+
+  <section class="card" id="panel-rolling" data-panel="rolling" hidden>
+    <label class="field"><span class="label">每段長度（年）</span><input id="rollYears" type="number" min="1" max="30" step="1" value="10"></label>
+    <div class="chips presets" id="rollPresets"></div>
+    <p class="hint">每個月初當一次起點，把所有同樣長度的區間都跑一遍，看結果的分布。</p>
+  </section>
+
+  <section class="card" id="panel-random" data-panel="random" hidden>
+    <div class="grid3">
+      <label class="field"><span class="label">次數</span><input id="rndN" type="number" min="10" max="5000" step="10" value="500"></label>
+      <label class="field"><span class="label">最短（年）</span><input id="rndMin" type="number" min="0.5" max="30" step="0.5" value="5"></label>
+      <label class="field"><span class="label">最長（年）</span><input id="rndMax" type="number" min="0.5" max="30" step="0.5" value="15"></label>
+    </div>
+    <div class="row">
+      <label class="field grow"><span class="label">亂數種子（相同種子 = 相同結果）</span><input id="rndSeed" type="number" step="1" value="42"></label>
+      <button class="btn" id="reseed" type="button">換一組</button>
+    </div>
+  </section>
+
+  <div id="status" class="status" role="status" aria-live="polite"></div>
+  <div id="results"></div>
+
+  <section class="card notes">
+    <details>
+      <summary>回測規則與資料說明</summary>
+      <ul>
+        <li>起始日之後第一個交易日以收盤價全額買進，結束日之前最後一個交易日以收盤價全部賣出；配息自動再投入。</li>
+        <li>扣買賣手續費（0.1425% × 折扣，最低 20 元）與 ETF 證交稅 0.1%。大盤是比較基準，不扣成本。</li>
+        <li>資料：證交所官方日成交資料、加權指數、報酬指數、除權除息計算結果；分割（0050 一拆四、00631L 一拆二十二）已還原。分割暫停交易期間報酬視為 0。</li>
+        <li>模擬段：大盤 2003 年前用加權指數加估計股息；0050、正2 上市前用大盤日報酬模擬，參數用上市後的真實資料校正，累積報酬與真實一致。模擬只適合看大方向，圖上以虛線表示。</li>
+        <li>隨機區間的亂數和 Colab 版不同，同樣的種子不會抽到同樣的區間，但分布應該接近。</li>
+      </ul>
+      <pre id="calibration"></pre>
+      <p class="hint">僅供研究參考，不構成投資建議。原始碼：<a href="https://github.com/kurochu888/twbt">github.com/kurochu888/twbt</a></p>
+    </details>
+  </section>
+</main>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

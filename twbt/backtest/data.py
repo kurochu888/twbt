@@ -29,7 +29,12 @@ def load_returns(data_dir: str | Path, use_synthetic: bool = True,
         x = pd.read_csv(d / f"{code}_long.csv", index_col=0, parse_dates=True)
         rets[code], syn[code] = x["ret"], x["is_synthetic"]
     r = pd.DataFrame(rets).sort_index().astype(float)
-    s = pd.DataFrame(syn).reindex(r.index).fillna(0).astype(int)
+    # 某標的序列開始之前的日子（例如第一天）視為模擬；之後的空缺（暫停交易）視為真實
+    s = pd.DataFrame(syn).reindex(r.index)
+    for c in s:
+        start = syn[c].index.min()
+        s.loc[s.index < start, c] = 1
+    s = s.fillna(0).astype(int)
     if not tw50_excess:
         p = json.loads((d / "params.json").read_text(encoding="utf-8"))
         mkt = r["TAIEX"]

@@ -92,7 +92,7 @@ def build_long(store: PriceStore, out_dir: Path, real: dict) -> None:
     mkt = pd.DataFrame({"close": px, "tr_ret": mkt_ret,
                         "is_synthetic": (mkt_ret.index < pd.Timestamp(info["報酬指數起日"])).astype(int)})
     mkt["tr_index"] = (1 + mkt["tr_ret"].fillna(0)).cumprod() * px.iloc[0]
-    mkt.to_csv(long_dir / "TAIEX_long.csv", float_format="%.6g")
+    mkt.to_csv(long_dir / "TAIEX_long.csv", float_format="%.10g")
     lines = [f"大盤：{px.index[0].date()} 起；報酬指數 {info['報酬指數起日']} 起，"
              f"之前用價格指數 + 估計股息 {info['股息估計（年化）']:.2%}/年"]
 
@@ -108,7 +108,7 @@ def build_long(store: PriceStore, out_dir: Path, real: dict) -> None:
         r50 = real["0050"]
         gap = syn.annualized_gap(r50["ret"], mkt_ret)
         s50 = syn.shift_return(mkt_ret, gap)
-        syn.splice(r50, s50).to_csv(long_dir / "0050_long.csv", float_format="%.6g")
+        syn.splice(r50, s50).to_csv(long_dir / "0050_long.csv", float_format="%.10g")
         params["gap_0050"] = gap
         lines.append(f"0050 模擬：大盤含息報酬 {gap:+.2%}/年")
         lines.append("  " + report("0050", r50["ret"], s50))
@@ -120,7 +120,7 @@ def build_long(store: PriceStore, out_dir: Path, real: dict) -> None:
         r = real[code]
         c = syn.calibrate_leverage(r["ret"], base)
         s = syn.leveraged_return(base, c)
-        syn.splice(r, s).to_csv(long_dir / f"{code}_long.csv", float_format="%.6g")
+        syn.splice(r, s).to_csv(long_dir / f"{code}_long.csv", float_format="%.10g")
         params[f"c_{code}"] = c
         lines.append(f"{code} 模擬：2 × {label}日報酬 {c:+.2%}/年（以累積報酬校正）")
         lines.append("  " + report(code, r["ret"], s))
@@ -149,7 +149,7 @@ def build(store: PriceStore, out_dir: Path) -> bool:
         adj = adjust(px, events)
         cols = ["open", "high", "low", "close", "volume", "adj_open", "adj_high", "adj_low",
                 "adj_close", "adj_factor", "ret", "event"]
-        adj[cols].to_csv(out_dir / f"{code}.csv", float_format="%.6g")
+        adj[cols].to_csv(out_dir / f"{code}.csv", float_format="%.10g")
         real[code] = adj
 
         n_ev = (adj["event"] != "").sum()

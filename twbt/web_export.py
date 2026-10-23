@@ -21,7 +21,7 @@ import pandas as pd
 
 from .backtest.data import KIND, NAMES, load_returns
 
-SCALE = 1e8
+SCALE = 1e10
 
 
 def _encode(s: pd.Series) -> list:
