@@ -1,0 +1,9 @@
+# 可以重建的東西不放進 git
+data/twbt.db
+data/twbt.db.tmp
+data/raw/
+data/adjusted/
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
