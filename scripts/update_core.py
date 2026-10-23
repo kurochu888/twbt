@@ -203,14 +203,18 @@ def main():
             sys.exit(1)
         store.export_csv(a.source)
     ok = build(store, Path(a.out))
-    if a.web:
+    if a.web and ok:
         from twbt.web_export import export_web  # noqa: E402
         info = export_web(Path(a.out), Path(a.web))
         print(f"\n網頁資料已輸出到 {a.web}（{info}）")
+    elif a.web:
+        print("\n檢查沒通過，這次不更新網頁資料（網頁維持上一次正確的版本）")
     if a.backup_to:
         store.backup(a.backup_to)
         print(f"已備份到 {a.backup_to}")
     print("\n全部檢查通過 ✓" if ok else "\n有需要注意的地方，請把上面的訊息貼給 Claude")
+    if not ok:
+        sys.exit(2)          # 讓自動排程標示為失敗、寄信通知
 
 
 if __name__ == "__main__":

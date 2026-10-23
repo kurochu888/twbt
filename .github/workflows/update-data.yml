@@ -1,0 +1,51 @@
+name: 每日更新資料
+
+on:
+  schedule:
+    # 週一到週五 台灣時間 16:17（UTC 08:17），收盤資料與報酬指數都已公布
+    - cron: "17 8 * * 1-5"
+  workflow_dispatch:        # 在 Actions 頁面可以手動按「Run workflow」
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/update-data.yml"   # 修改這個檔案時自動跑一次，方便測試
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-data
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 安裝套件
+        run: pip install -r requirements.txt
+
+      - name: 測試
+        run: python -m unittest discover tests
+
+      - name: 下載新資料、重算還原價與網頁資料
+        run: python -u scripts/update_core.py
+
+      - name: 有變動就存回 repo
+        run: |
+          if git diff --quiet -- data/source docs/data; then
+            echo "資料沒有變動"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/source docs/data
+          git commit -m "每日資料更新 $(TZ=Asia/Taipei date +%Y-%m-%d)"
+          git push
