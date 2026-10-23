@@ -77,8 +77,8 @@ class TestRebalance(unittest.TestCase):
     def test_cash_interest_and_costs(self):
         rb = self.rb()
         out = rb.run(RebalConfig({"0050": 0.0, "CASH": 1.0}, "none", 0, 0.01), self.dates[0], self.dates[-1])
-        days = len(self.dates) - 1
-        self.assertAlmostEqual(out["策略"].iloc[-1], 1_000_000 * 1.01 ** (days / 252))
+        years = (self.dates[-1] - self.dates[0]).days / 365.25          # 利息照日曆時間
+        self.assertAlmostEqual(out["策略"].iloc[-1], 1_000_000 * 1.01 ** years)
         rb2 = self.rb(TaiwanCost())
         e = rb2.run(RebalConfig({"0050": 1.0}, "none", 0, 0.0), self.dates[0], self.dates[-1])["策略"]
         invested = 1_000_000 / 1.001425                          # 買進金額含手續費 = 100 萬
@@ -99,12 +99,33 @@ class TestRebalance(unittest.TestCase):
     def test_all_cash(self):
         rb = self.rb()
         out = rb.run(RebalConfig({"CASH": 1.0}, "M", 0.05, 0.02), self.dates[0], self.dates[-1])   # 以前會當掉
-        self.assertAlmostEqual(out["策略"].iloc[-1], 1_000_000 * 1.02 ** ((len(self.dates) - 1) / 252))
+        self.assertAlmostEqual(out["策略"].iloc[-1], 1_000_000 * 1.02 ** ((self.dates[-1] - self.dates[0]).days / 365.25))
         self.assertEqual(out["交易次數"], 0)
 
     def test_exposure(self):
         self.assertAlmostEqual(RebalConfig({"00631L": 0.65, "CASH": 0.35}).exposure(), 1.3)
         self.assertAlmostEqual(RebalConfig({"0050": 0.5, "00631L": 0.5}).exposure(), 1.5)
+
+
+class TestRebalanceHalt(unittest.TestCase):
+    def test_no_trade_on_halt_day(self):
+        tmp = tempfile.TemporaryDirectory()
+        dates = pd.bdate_range("2020-03-23", "2020-04-10")       # 4/1 是 4 月第一個交易日
+        n = len(dates)
+        p631 = np.where(dates < pd.Timestamp("2020-03-27"), 1.0, 2.0)
+        flat = np.ones(n)
+        write(Path(tmp.name), dates, {"TAIEX": flat, "0050": flat, "00631L": p631, "00675L": flat})
+        # 00631L 3/31～4/2 暫停交易：長期序列裡沒有這幾天
+        f = Path(tmp.name) / "long/00631L_long.csv"
+        df = pd.read_csv(f, index_col=0, parse_dates=True)
+        df[(df.index < "2020-03-31") | (df.index > "2020-04-02")].to_csv(f)
+        bh = BuyHold(tmp.name, cost=NO_COST, capital=1_000_000)
+        rb = RebalBacktest(bh)
+        out = rb.run(RebalConfig({"00631L": 0.5, "CASH": 0.5}, "M", 0, 0.0), dates[0], dates[-1])
+        log = [str(d.date()) for d, w in out["紀錄"]]
+        self.assertNotIn("2020-04-01", log)                       # 暫停交易那天不調
+        self.assertEqual(out["交易次數"], 1)                       # 4 月只檢查一次（4/1），所以整段只有期初那筆
+        tmp.cleanup()
 
 
 class TestRebalanceTrend(unittest.TestCase):

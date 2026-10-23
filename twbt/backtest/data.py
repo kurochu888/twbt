@@ -7,6 +7,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from ..data.synthetic import year_frac
+
 ASSETS = ["TAIEX", "0050", "00631L", "00675L"]
 NAMES = {"TAIEX": "大盤（含息）", "0050": "0050", "00631L": "00631L 台灣50正2", "00675L": "00675L 加權正2"}
 # 證交稅類別：index 是比較基準、不能直接交易，不收任何成本
@@ -43,7 +45,8 @@ def load_returns(data_dir: str | Path, use_synthetic: bool = True,
         # 00631L ≈ 2 × (大盤 + 台灣50差距) − 成本，拿掉差距：c − 2 × 差距
         c = p["c_00631L"] - 2 * p["gap_0050"]
         pre631 = s["00631L"] == 1
-        r.loc[pre631, "00631L"] = (2 * mkt[pre631] + np.expm1(c / 252)).clip(lower=-0.999)
+        dt = year_frac(r.index)
+        r.loc[pre631, "00631L"] = (2 * mkt[pre631] + np.expm1(c * dt[pre631])).clip(lower=-0.999)
     # 上市後的缺值 = 暫停交易（例如分割期間）：價格凍結、報酬為 0，恢復交易日再反映
     for c in r:
         first = r[c].first_valid_index()
@@ -76,7 +79,7 @@ def load_signal_inputs(data_dir: str | Path, rets: pd.DataFrame, syn: pd.DataFra
             if not tw50_excess and code == "0050":
                 dy = json.loads((d / "params.json").read_text(encoding="utf-8"))["dividend_yield"]
                 pre = syn[code] == 1
-                pr[pre] = np.expm1(np.log1p(rets.loc[pre, code]) - dy / 252)
+                pr[pre] = np.expm1(np.log1p(rets.loc[pre, code]) - dy * year_frac(rets.index)[pre])
             price[code] = pr.where(rets[code].notna())
     first = {c: rets[c].first_valid_index() for c in rets}
     for c in price:

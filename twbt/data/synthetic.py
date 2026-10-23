@@ -20,12 +20,25 @@ import pandas as pd
 TRADING_DAYS = 252
 
 
+def year_frac(index) -> pd.Series:
+    """每個交易日距離前一個交易日過了幾年（日曆天 ÷ 365.25）。
+
+    用日曆時間而不是「一年 252 個交易日」：1990～2000 年台股週六也開盤，一年有 270～290 個交易日，
+    用 252 換算會把股息、內扣成本、利息多算一成左右。第一天沒有前一天，用一般的交易日間隔（中位數）。
+    """
+    idx = pd.DatetimeIndex(index)
+    d = np.diff(idx.values).astype("timedelta64[D]").astype(float) / 365.25
+    first = float(np.median(d)) if len(d) else 1 / TRADING_DAYS
+    return pd.Series(np.concatenate([[first], d]) if len(idx) else [], index=idx)
+
+
 def annualized_gap(a: pd.Series, b: pd.Series) -> float:
-    """兩個日報酬序列在重疊期間的「平均每日差距 × 252」。"""
+    """兩個日報酬序列在重疊期間的年化差距：對數報酬差的總和 ÷ 經過的年數。"""
     df = pd.concat([a, b], axis=1, keys=["a", "b"], sort=True).astype(float).dropna()
     if len(df) < 60:
         raise ValueError("重疊期間太短，無法校正")
-    return float((np.log1p(df["a"]) - np.log1p(df["b"])).mean() * TRADING_DAYS)
+    dt = year_frac(a.index).reindex(df.index)
+    return float((np.log1p(df["a"]) - np.log1p(df["b"])).sum() / dt.sum())
 
 
 def market_total_return(price_close: pd.Series, tr_close: pd.Series) -> tuple[pd.Series, dict]:
@@ -34,7 +47,7 @@ def market_total_return(price_close: pd.Series, tr_close: pd.Series) -> tuple[pd
     tr_ret = tr_close.reindex(price_close.index).pct_change()
     dy = annualized_gap(tr_ret, px_ret)            # 年化股息估計
     first_tr = tr_close.dropna().index[1]          # 報酬指數第一個有報酬的日子
-    est = np.expm1(np.log1p(px_ret) + dy / TRADING_DAYS)
+    est = np.expm1(np.log1p(px_ret) + dy * year_frac(px_ret.index))
     ret = tr_ret.where(tr_ret.index >= first_tr, est)
     info = {"股息估計（年化）": dy, "報酬指數起日": first_tr.date().isoformat()}
     return ret, info
@@ -49,9 +62,10 @@ def calibrate_leverage(real_ret: pd.Series, base_ret: pd.Series, leverage: float
     if len(df) < 60:
         raise ValueError("重疊期間太短，無法校正")
     target = np.log1p(df["real"]).sum()
+    dt = year_frac(base_ret.index).reindex(df.index).to_numpy()
 
     def total(c):
-        return np.log1p(leveraged_return(df["base"], c, leverage)).sum()
+        return np.log1p((leverage * df["base"].to_numpy() + np.expm1(c * dt)).clip(min=-0.999)).sum()
 
     lo, hi = -0.5, 0.5
     for _ in range(100):
@@ -65,13 +79,13 @@ def calibrate_leverage(real_ret: pd.Series, base_ret: pd.Series, leverage: float
 
 def leveraged_return(base_ret: pd.Series, annual_c: float, leverage: float = 2.0) -> pd.Series:
     """每日重新平衡的槓桿報酬。單日虧損最多 -100%（實際上不會發生，保護用）。"""
-    r = leverage * base_ret + np.expm1(annual_c / TRADING_DAYS)
+    r = leverage * base_ret + np.expm1(annual_c * year_frac(base_ret.index))
     return r.clip(lower=-0.999)
 
 
 def shift_return(base_ret: pd.Series, annual_gap: float) -> pd.Series:
     """在基準報酬上加一個年化差距（對數空間）。"""
-    return np.expm1(np.log1p(base_ret) + annual_gap / TRADING_DAYS)
+    return np.expm1(np.log1p(base_ret) + annual_gap * year_frac(base_ret.index))
 
 
 def splice(real: pd.DataFrame, synth_ret: pd.Series) -> pd.DataFrame:

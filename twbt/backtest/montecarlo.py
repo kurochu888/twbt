@@ -80,19 +80,23 @@ def monte_carlo(ret: pd.Series, sig_ret: pd.Series, params: TrendParams, *, n: i
                 cost: TaiwanCost | None = None, kind: str = "etf") -> pd.DataFrame:
     """回傳每條路徑一列：策略與買進持有的年化、回撤、進出次數。"""
     cost = cost or TaiwanCost()
+    from ..data.synthetic import year_frac
     r = ret.to_numpy(dtype=float)
     s = sig_ret.reindex(ret.index).to_numpy(dtype=float)
+    dt = year_frac(ret.index).to_numpy()
     ok = ~(np.isnan(r) | np.isnan(s))
-    r, s = r[ok], s[ok]
+    r, s, dt = r[ok], s[ok], dt[ok]
     warm = max(params.ma_fast, params.ma_slow) - 1
-    length = warm + int(round(years * TRADING_DAYS))
+    ppy = len(r) / dt[1:].sum()                         # 取樣歷史平均一年幾個交易日（1990 年代比較多）
+    length = warm + int(round(years * ppy))
     rng = np.random.default_rng(seed)
     rows = []
     for k in range(n):
         idx = bootstrap_indices(len(r), length, block, rng)
         eq, bh, trades = _run_path(r[idx], s[idx], params, warm, capital, cost, kind)
-        sc, sm = _stats(eq, years)
-        bc, bm = _stats(bh, years)
+        yrs = dt[idx[warm:]].sum()                      # 這條路徑實際經過的日曆時間
+        sc, sm = _stats(eq, yrs)
+        bc, bm = _stats(bh, yrs)
         rows.append((sc, sm, bc, bm, trades))
     return pd.DataFrame(rows, columns=["策略年化", "策略回撤", "持有年化", "持有回撤", "進出次數"])
 

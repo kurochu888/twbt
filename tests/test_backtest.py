@@ -106,9 +106,11 @@ class TestBuyHold(unittest.TestCase):
         bh = BuyHold(self.dir, tw50_excess=False)
         pre = bh.syn["0050"] == 1
         np.testing.assert_allclose(bh.rets.loc[pre, "0050"].iloc[1:], bh.rets.loc[pre, "TAIEX"].iloc[1:])
-        # 00631L：2 × 大盤 + (0.01 − 2 × 0.02)/年
-        exp = 2 * 0.0004 + np.expm1(-0.03 / 252)
-        self.assertAlmostEqual(bh.rets.loc[pre, "00631L"].iloc[5], exp)
+        # 00631L：2 × 大盤 + (0.01 − 2 × 0.02)/年，照日曆時間（這一天距離前一個交易日幾天）
+        from twbt.data.synthetic import year_frac
+        day = bh.rets.index[pre][5]
+        exp = 2 * 0.0004 + np.expm1(-0.03 * year_frac(bh.rets.index)[day])
+        self.assertAlmostEqual(bh.rets.loc[day, "00631L"], exp)
         # 真實段不受影響
         post = bh.syn["0050"] == 0
         self.assertAlmostEqual(bh.rets.loc[post, "0050"].iloc[5], 0.0004)

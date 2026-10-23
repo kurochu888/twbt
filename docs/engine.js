@@ -37,7 +37,11 @@ export function prepare(json) {
       halt: new Set(a.halt || []),
     };
   }
-  return { days, assets, updated: json.updated, calibration: json.calibration, params: json.params };
+  // 每個交易日距離前一個交易日幾年（日曆天 ÷ 365.25）：現金利息、蒙地卡羅的年數照日曆時間算（1990 年代週六也開盤）
+  const dt = new Float64Array(days.length);
+  for (let i = 1; i < days.length; i++) dt[i] = (days[i] - days[i - 1]) / 365.25;
+  if (days.length > 1) dt[0] = quantile(Array.from(dt.subarray(1)).sort((a, b) => a - b), 0.5);
+  return { days, dt, assets, updated: json.updated, calibration: json.calibration, params: json.params };
 }
 
 // 依設定取得某標的的每日報酬。useSynthetic=false 時，上市前（含上市當天）設為 NaN。
@@ -111,7 +115,8 @@ export function summarize(eq, dayIdx, rf = 0) {
   const r = [];
   for (let i = 1; i < n; i++) r.push(eq[i] / eq[i - 1] - 1);
   const sd = std(r);
-  const ex = r.map(x => x - rf / TRADING_DAYS);
+  const ppy = years > 0 ? r.length / years : TRADING_DAYS;   // 這段期間平均一年幾個交易日
+  const ex = r.map(x => x - rf / ppy);
   const down = r.filter(x => x < 0);
   const dd = maxDrawdown(eq);
   // 年度報酬：每年最後一天的淨值相比
@@ -123,9 +128,9 @@ export function summarize(eq, dayIdx, rf = 0) {
   const yearly = yearEnd.map((p, k) => p.v / (k === 0 ? eq[0] : yearEnd[k - 1].v) - 1);
   return {
     start: dayToIso(dayIdx[0]), end: dayToIso(dayIdx[n - 1]), years,
-    total, cagr, vol: sd * Math.sqrt(TRADING_DAYS),
-    sharpe: sd > 0 ? mean(ex) / sd * Math.sqrt(TRADING_DAYS) : NaN,
-    sortino: down.length > 1 ? mean(ex) / std(down) * Math.sqrt(TRADING_DAYS) : NaN,
+    total, cagr, vol: sd * Math.sqrt(ppy),
+    sharpe: sd > 0 ? mean(ex) / sd * Math.sqrt(ppy) : NaN,
+    sortino: down.length > 1 ? mean(ex) / std(down) * Math.sqrt(ppy) : NaN,
     mdd: dd.mdd, mddTop: dayToIso(dayIdx[dd.top]), mddTrough: dayToIso(dayIdx[dd.trough]),
     mddRecovery: dd.recovery !== null ? dayToIso(dayIdx[dd.recovery]) : null,
     calmar: dd.mdd < 0 ? cagr / Math.abs(dd.mdd) : NaN,
@@ -189,7 +194,7 @@ function windowStats(data, code, r, si, ei, opts) {
   return {
     code, start: dayToIso(data.days[si]), end: dayToIso(data.days[ei]), years,
     total: net - 1, cagr: net > 0 ? net ** (1 / years) - 1 : -1,
-    mdd, vol: std(daily) * Math.sqrt(TRADING_DAYS), syntheticShare: syn / (ei - si + 1),
+    mdd, vol: std(daily) * Math.sqrt(daily.length / years), syntheticShare: syn / (ei - si + 1),
   };
 }
 
@@ -506,14 +511,16 @@ function geometric(rnd, p) {
 
 export function mcSource(data, code, opts) {
   const r = returnsFor(data, code, opts), s = signalReturnsFor(data, code, opts);
-  const rr = [], ss = [];
-  for (let i = 0; i < r.length; i++) if (!Number.isNaN(r[i]) && !Number.isNaN(s[i])) { rr.push(r[i]); ss.push(s[i]); }
+  const rr = [], ss = [], dd = [];
+  for (let i = 0; i < r.length; i++) if (!Number.isNaN(r[i]) && !Number.isNaN(s[i])) { rr.push(r[i]); ss.push(s[i]); dd.push(data.dt[i]); }
   let first = -1;
   for (let i = 0; i < r.length; i++) if (!Number.isNaN(r[i])) { first = i; break; }
-  return { r: Float64Array.from(rr), s: Float64Array.from(ss), from: first > 0 ? dayToIso(data.days[first]) : '－', to: dayToIso(data.days[data.days.length - 1]) };
+  return { r: Float64Array.from(rr), s: Float64Array.from(ss), dt: Float64Array.from(dd), from: first > 0 ? dayToIso(data.days[first]) : '－', to: dayToIso(data.days[data.days.length - 1]) };
 }
 
-function mcPath(src, idx, p, warm, kind, cost, capital, years) {
+function mcPath(src, idx, p, warm, kind, cost, capital) {
+  let years = 0;
+  for (let j = warm; j < idx.length; j++) years += src.dt[idx[j]];   // 這條路徑實際經過的日曆時間
   const n = idx.length + 1;
   const price = new Float64Array(n), spx = new Float64Array(n);
   price[0] = spx[0] = 1;
@@ -553,8 +560,10 @@ export async function monteCarlo(data, code, opts, custom, { n = 1000, years = 1
   const src = mcSource(data, code, opts);
   const p = trendParamsFor(code, custom);
   const warm = Math.max(p.maFast, p.maSlow) - 1;
-  const len = warm + Math.round(years * TRADING_DAYS);
   if (src.r.length < 2 * Math.max(p.maFast, p.maSlow)) throw new Error(`${code} 可抽樣的資料太少`);
+  let span = 0;
+  for (let i = 1; i < src.dt.length; i++) span += src.dt[i];
+  const len = warm + Math.round(years * src.r.length / span);   // 取樣歷史平均一年幾個交易日
   const rnd = mulberry32(seed), N = src.r.length, prob = 1 / block;
   const cost = opts.cost ?? makeCost(), capital = opts.capital ?? 1_000_000, kind = data.assets[code].kind;
   const rows = [], idx = new Int32Array(len);
@@ -565,7 +574,7 @@ export async function monteCarlo(data, code, opts, custom, { n = 1000, years = 1
       for (let j = 0; j < L; j++) idx[i + j] = (start + j) % N;
       i += L;
     }
-    rows.push(mcPath(src, idx, p, warm, kind, cost, capital, years));
+    rows.push(mcPath(src, idx, p, warm, kind, cost, capital));
     if ((k + 1) % chunk === 0 && onProgress) {
       if (onProgress((k + 1) / n) === false) return null;
       await new Promise(res => setTimeout(res, 0));
@@ -637,7 +646,7 @@ function rebalSim(data, ctx, cfg, si, ei, opts, keepLog) {
   const { w, codes, R, preps } = ctx;
   const keyAt = ctx.keyAt ?? (t => periodKey(data.days[t], cfg.freq));
   const cost = opts.cost ?? makeCost(), capital = opts.capital ?? 1_000_000, rate = cost.rate;
-  const cashD = (1 + (cfg.cashRate ?? 0)) ** (1 / TRADING_DAYS) - 1;
+  const cashG = 1 + (cfg.cashRate ?? 0), dtAt = ctx.dt ? (t => ctx.dt[t]) : (t => data.dt[t]);
   const h = Object.fromEntries(codes.map(c => [c, 0]));
   let cash = capital, trades = 0;
   const log = [];
@@ -661,8 +670,11 @@ function rebalSim(data, ctx, cfg, si, ei, opts, keepLog) {
   };
   const total = () => { let v = cash; for (const c of codes) v += h[c]; return v; };
   // smallOk：期初建立部位、均線訊號的進出不受 MIN_TRADE 限制；目標 0（出場）一定全部賣掉
+  let curT = si;
+  // 暫停交易（分割）的日子不能買賣：定期再平衡先跳過那一檔，下次檢查再調（模擬路徑沒有暫停交易日）
+  const halted = c => !ctx.dt && data.assets[c].halt.has(curT);
   const tradeTo = (tw, only, smallOk) => {
-    const V = total(), sel = only ? [only] : codes;
+    const V = total(), sel = only ? [only] : codes.filter(c => smallOk || !halted(c));
     for (const c of sel) if (h[c] > tw[c] * V) sell(c, h[c] - tw[c] * V, smallOk || tw[c] === 0);
     for (const c of sel) if (h[c] < tw[c] * V) buy(c, tw[c] * V - h[c], smallOk);
   };
@@ -671,8 +683,9 @@ function rebalSim(data, ctx, cfg, si, ei, opts, keepLog) {
   eq[0] = total();
   let lastKey = keyAt(si);
   for (let t = si + 1; t <= ei; t++) {
+    curT = t;
     for (const c of codes) h[c] *= 1 + R[c][t];
-    cash *= 1 + cashD;
+    cash *= cashG ** dtAt(t);
     const tw = target(t);
     if (cfg.trend) for (const c of codes) {
       const g = preps[c];
@@ -685,7 +698,7 @@ function rebalSim(data, ctx, cfg, si, ei, opts, keepLog) {
       const V = total();
       let dev = Math.abs(cash / V - tw.CASH);
       for (const c of codes) dev = Math.max(dev, Math.abs(h[c] / V - tw[c]));
-      if (!(cfg.band > 0) || dev > cfg.band + 1e-12) { tradeTo(tw); if (keepLog) log.push({ i: t, what: '再平衡' }); }
+      if (!(cfg.band > 0) || dev > cfg.band + 1e-12) { const n0 = trades; tradeTo(tw); if (keepLog && trades > n0) log.push({ i: t, what: '再平衡' }); }
     }
     eq[t - si] = total();
   }
@@ -738,13 +751,16 @@ export function rebalWindows(data, cfg, wins, opts, custom) {
 // 模擬行情沒有日曆，「每月／每季／每半年／每年」用交易日數近似：21／63／126／252 天
 const FREQ_DAYS = { M: 21, Q: 63, H: 126, Y: 252 };
 
-export function rebalMcPath(data, cfg, opts, custom, idx, warm, years, srcIn) {
+export function rebalMcPath(data, cfg, opts, custom, idx, warm, yearsIn, srcIn) {
   const w = normWeights(cfg.weights);
   const codes = Object.keys(w).filter(k => k !== 'CASH');
   const need = new Set([...codes, '0050', '00631L']);           // 對照組要用到 0050、00631L
   const src = srcIn ?? Object.fromEntries([...need].map(c => [c, { r: returnsFor(data, c, opts), s: signalReturnsFor(data, c, opts) }]));
   const n = idx.length + 1;
   const R = {}, preps = {}, kind = {};
+  const dtp = new Float64Array(n);
+  let years = 0;
+  for (let j = 1; j < n; j++) { dtp[j] = data.dt[idx[j - 1]]; if (j > warm) years += dtp[j]; }   // 實際經過的日曆時間
   for (const c of need) {
     const r = new Float64Array(n), spx = new Float64Array(n);
     spx[0] = 1;
@@ -756,7 +772,7 @@ export function rebalMcPath(data, cfg, opts, custom, idx, warm, years, srcIn) {
     }
   }
   const fd = FREQ_DAYS[cfg.freq];
-  const mk = (cf, cs) => ({ w: normWeights(cf.weights), codes: cs, R, kind,
+  const mk = (cf, cs) => ({ w: normWeights(cf.weights), codes: cs, R, kind, dt: dtp,
     preps: cf.trend ? Object.fromEntries(cs.filter(c => preps[c]).map(c => [c, preps[c]])) : {},
     keyAt: t => (fd ? Math.floor((t - warm) / fd) : null) });
   const ei = n - 1, capital = opts.capital ?? 1_000_000;
@@ -787,7 +803,9 @@ export async function rebalMonteCarlo(data, cfg, opts, custom, { n = 1000, years
   for (let i = 0; i < data.days.length; i++) if (rs.every(([r, s]) => !Number.isNaN(r[i]) && !Number.isNaN(s[i]))) ok.push(i);
   if (ok.length < 600) throw new Error('可抽樣的資料太少');
   const warm = Math.max(...['00631L', '00675L'].map(c => { const p = trendParamsFor(c, custom); return Math.max(p.maFast, p.maSlow); })) - 1;
-  const len = warm + Math.round(years * TRADING_DAYS);
+  let span = 0;
+  for (let k = 1; k < ok.length; k++) span += data.dt[ok[k]];
+  const len = warm + Math.round(years * ok.length / span);   // 取樣歷史平均一年幾個交易日
   const rnd = mulberry32(seed), N = ok.length, prob = 1 / block;
   const idx = new Int32Array(len), rows = [];
   for (let k = 0; k < n; k++) {

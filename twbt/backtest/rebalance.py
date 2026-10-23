@@ -70,6 +70,11 @@ class RebalBacktest:
         self.tb = tb or TrendBacktest(bh)
         self.idx = self.rets.index
         self.R = {c: self.rets[c].to_numpy() for c in ASSETS}
+        from ..data.synthetic import year_frac
+        from .data import load_signal_inputs
+        self.dt = year_frac(self.idx).to_numpy()          # 現金利息照日曆時間算
+        traded = load_signal_inputs(bh.data_dir, self.rets, self.syn, bh.tw50_excess)[1]
+        self.halt = {c: ~traded[c].to_numpy() for c in ASSETS}   # 暫停交易（分割）的日子不能買賣
 
     # 某天正2 的均線狀態 → 比例（續抱 1、接刀 k/層數、其他 0）
     def _trend_frac(self, code: str, t: int) -> float:
@@ -99,7 +104,6 @@ class RebalBacktest:
         codes = [c for c in w if c != "CASH"]
         cost, capital = self.bh.cost, self.bh.capital
         rate = cost.commission * cost.discount
-        cash_d = (1 + cfg.cash_rate) ** (1 / TRADING_DAYS) - 1
         h = {c: 0.0 for c in codes}
         cash = capital
         trades = 0
@@ -137,7 +141,7 @@ class RebalBacktest:
         def trade_to(tw, only=None, small_ok=False):
             # small_ok：期初建立部位、均線訊號的進出不受 MIN_TRADE 限制；目標 0（出場）一定全部賣掉
             V = cash + sum(h.values())
-            sel = [only] if only else codes
+            sel = [only] if only else [c for c in codes if small_ok or not self.halt[c][cur_t]]
             for c in sel:
                 if h[c] > tw[c] * V:
                     sell(c, h[c] - tw[c] * V, small_ok or tw[c] == 0)
@@ -145,14 +149,16 @@ class RebalBacktest:
                 if h[c] < tw[c] * V:
                     buy(c, tw[c] * V - h[c], small_ok)
 
+        cur_t = si
         trade_to(target(si), small_ok=True)
         eq = np.empty(ei - si + 1)
         eq[0] = cash + sum(h.values())
         last_key = _period_key(self.idx[si], cfg.freq)
         for t in range(si + 1, ei + 1):
+            cur_t = t
             for c in codes:
                 h[c] *= 1 + self.R[c][t]
-            cash *= 1 + cash_d
+            cash *= (1 + cfg.cash_rate) ** self.dt[t]
             tw = target(t)
             # 均線有動作的正2：只調那一檔
             if cfg.trend:
@@ -171,8 +177,9 @@ class RebalBacktest:
                 V = cash + sum(h.values())
                 dev = max([abs(h[c] / V - tw[c]) for c in codes] + [abs(cash / V - tw["CASH"])])   # 全部現金時 codes 是空的
                 if cfg.band <= 0 or dev > cfg.band + 1e-12:
+                    n0 = trades
                     trade_to(tw)
-                    if keep_trades:
+                    if keep_trades and trades > n0:               # 真的有成交才記
                         log.append((self.idx[t], "再平衡"))
             eq[t - si] = cash + sum(h.values())
         for c in codes:                                   # 期末全部賣出（扣成本）

@@ -25,11 +25,13 @@ def summarize(equity: pd.Series, rf: float = 0.0) -> dict:
     total = e.iloc[-1] / e.iloc[0] - 1
     cagr = (1 + total) ** (1 / years) - 1 if years > 0 and total > -1 else float("nan")
     r = e.pct_change().dropna()
-    vol = r.std() * np.sqrt(TRADING_DAYS)
-    ex = r - rf / TRADING_DAYS
-    sharpe = ex.mean() / r.std() * np.sqrt(TRADING_DAYS) if r.std() > 0 else float("nan")
+    # 年化用「這段期間平均一年幾個交易日」，不是固定 252（1990 年代週六也開盤，一年 280 天左右）
+    ppy = len(r) / years if years > 0 else TRADING_DAYS
+    vol = r.std() * np.sqrt(ppy)
+    ex = r - rf / ppy
+    sharpe = ex.mean() / r.std() * np.sqrt(ppy) if r.std() > 0 else float("nan")
     down = r[r < 0]
-    sortino = ex.mean() / down.std() * np.sqrt(TRADING_DAYS) if len(down) > 1 else float("nan")
+    sortino = ex.mean() / down.std() * np.sqrt(ppy) if len(down) > 1 else float("nan")
     mdd, top, trough, rec = max_drawdown(e)
     yearly = e.resample("YE").last().pct_change()
     yearly.iloc[0] = e.resample("YE").last().iloc[0] / e.iloc[0] - 1

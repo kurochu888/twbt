@@ -28,9 +28,21 @@ class TestSynthetic(unittest.TestCase):
 
     def test_leverage_calibration(self):
         base = pd.Series(rng.normal(0.0003, 0.012, len(DATES)), index=DATES)
-        real = leveraged_return(base, -0.02)           # 真實年化拖累 -2%
-        c = calibrate_leverage(real.iloc[2000:], base.iloc[2000:])
+        part = base.iloc[2000:]
+        real = leveraged_return(part, -0.02)           # 真實年化拖累 -2%
+        c = calibrate_leverage(real, part)
         self.assertAlmostEqual(c, -0.02, places=6)
+
+    def test_calendar_time(self):
+        # 一週 6 天交易（像 1990 年代）跟一週 5 天，一年的股息估計都要是 3%
+        from twbt.data.synthetic import year_frac
+        for freq in ("B", "C"):
+            idx = pd.bdate_range("1995-01-02", "1999-12-31", freq=freq, weekmask="Mon Tue Wed Thu Fri Sat" if freq == "C" else None)
+            px = pd.Series(np.cumprod(np.full(len(idx), 1.0003)), index=idx) * 100
+            gross = np.expm1(np.log1p(px.pct_change()) + 0.03 * year_frac(idx))
+            years = (idx[-1] - idx[0]).days / 365.25
+            total = np.log1p(gross.iloc[1:]).sum() - np.log1p(px.pct_change().iloc[1:]).sum()
+            self.assertAlmostEqual(total / years, 0.03, places=6)
 
     def test_splice_continuity(self):
         syn = pd.Series(rng.normal(0.0005, 0.01, len(DATES)), index=DATES)

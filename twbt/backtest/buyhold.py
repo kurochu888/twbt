@@ -91,7 +91,7 @@ class BuyHold:
             "總報酬": final_net - 1,
             "年化報酬": final_net ** (1 / years) - 1 if final_net > 0 else -1.0,
             "最大回撤": mdd,
-            "年化波動": float(np.std(r, ddof=1) * np.sqrt(TRADING_DAYS)),
+            "年化波動": float(np.std(r, ddof=1) * np.sqrt(len(r) / years)),
             "模擬資料占比": float(self.syn[asset].loc[s:e].mean()),
         }
 
