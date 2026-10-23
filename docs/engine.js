@@ -60,7 +60,8 @@ export function isSynthetic(data, code, i) {
 // ---------- 成本 ----------
 export const TAX = { stock: 0.003, etf: 0.001, index: 0 };
 export function makeCost({ commission = 0.001425, discount = 1, minFee = 20, tax = TAX } = {}) {
-  const fee = (amt, kind) => (kind === 'index' || amt <= 0) ? 0 : Math.max(amt * commission * discount, minFee);
+  // 免手續費（折扣 0）時連最低 20 元也不收
+  const fee = (amt, kind) => (kind === 'index' || amt <= 0 || !(commission * discount > 0)) ? 0 : Math.max(amt * commission * discount, minFee);
   return {
     rate: commission * discount,
     buy: (amt, kind) => fee(amt, kind),
@@ -383,6 +384,7 @@ export function trendPrep(data, code, opts, p) {
   const win = Math.max(p.maFast, p.maSlow);
   const minSi = pos.length >= win ? i0 + pos[win - 1] : Infinity;   // 均線第一次算得出來的那天
   const out = { i0, minSi, price, act, status, layers };
+  if (prepCache.size >= 20) prepCache.delete(prepCache.keys().next().value);   // 最多留 20 份（改參數很多次也不會一直吃記憶體）
   prepCache.set(key, out);
   return out;
 }
@@ -590,6 +592,7 @@ export function mcSummary(rows) {
 // 跟 twbt/backtest/rebalance.py 逐行對應。cfg = {weights: {code: w, CASH: w}, freq: 'none'|'M'|'Q'|'H'|'Y', band, cashRate, trend}
 export const REBAL_ASSETS = ['0050', '00631L', '00675L'];
 const LEVERAGED = new Set(['00631L', '00675L']);
+const MIN_TRADE = 1000;   // 再平衡時單筆不到 1,000 元就不交易（跟 Python 版一樣）
 export const EXPOSURE = { '0050': 1, '00631L': 2, '00675L': 2, CASH: 0 };
 
 export function normWeights(weights) {
@@ -649,20 +652,21 @@ function rebalSim(data, ctx, cfg, si, ei, opts, keepLog) {
     tw.CASH = 1 - s; return tw;
   };
   const kind = c => (ctx.kind ? ctx.kind[c] : data.assets[c].kind);
-  const sell = (c, amt) => { if (amt <= 0) return; cash += amt - cost.sell(amt, kind(c)); h[c] -= amt; trades++; };
-  const buy = (c, amt) => {
-    amt = Math.min(amt, cash); if (amt <= 0) return;
+  const sell = (c, amt, smallOk) => { if (amt <= 0 || (amt < MIN_TRADE && !smallOk)) return; cash += amt - cost.sell(amt, kind(c)); h[c] -= amt; trades++; };
+  const buy = (c, amt, smallOk) => {
+    amt = Math.min(amt, cash); if (amt <= 0 || (amt < MIN_TRADE && !smallOk)) return;
     const fee = cost.buy(amt / (1 + rate), kind(c)), gross = amt - fee;
     if (gross <= 0) return;
     cash -= amt; h[c] += gross; trades++;
   };
   const total = () => { let v = cash; for (const c of codes) v += h[c]; return v; };
-  const tradeTo = (tw, only) => {
+  // smallOk：期初建立部位、均線訊號的進出不受 MIN_TRADE 限制；目標 0（出場）一定全部賣掉
+  const tradeTo = (tw, only, smallOk) => {
     const V = total(), sel = only ? [only] : codes;
-    for (const c of sel) if (h[c] > tw[c] * V) sell(c, h[c] - tw[c] * V);
-    for (const c of sel) if (h[c] < tw[c] * V) buy(c, tw[c] * V - h[c]);
+    for (const c of sel) if (h[c] > tw[c] * V) sell(c, h[c] - tw[c] * V, smallOk || tw[c] === 0);
+    for (const c of sel) if (h[c] < tw[c] * V) buy(c, tw[c] * V - h[c], smallOk);
   };
-  tradeTo(target(si));
+  tradeTo(target(si), null, true);
   const eq = new Float64Array(ei - si + 1);
   eq[0] = total();
   let lastKey = keyAt(si);
@@ -672,7 +676,7 @@ function rebalSim(data, ctx, cfg, si, ei, opts, keepLog) {
     const tw = target(t);
     if (cfg.trend) for (const c of codes) {
       const g = preps[c];
-      if (g && g.prep.act[t - g.prep.i0]) { tradeTo(tw, c); if (keepLog) log.push({ i: t, what: `${c} 均線訊號`, act: g.prep.act[t - g.prep.i0] }); }
+      if (g && g.prep.act[t - g.prep.i0]) { tradeTo(tw, c, true); if (keepLog) log.push({ i: t, what: `${c} 均線訊號`, act: g.prep.act[t - g.prep.i0] }); }
     }
     const key = keyAt(t);
     const check = (cfg.freq === 'none' && cfg.band > 0) || (key !== null && key !== lastKey);
@@ -734,12 +738,11 @@ export function rebalWindows(data, cfg, wins, opts, custom) {
 // 模擬行情沒有日曆，「每月／每季／每半年／每年」用交易日數近似：21／63／126／252 天
 const FREQ_DAYS = { M: 21, Q: 63, H: 126, Y: 252 };
 
-export function rebalMcPath(data, cfg, opts, custom, idx, warm, years) {
+export function rebalMcPath(data, cfg, opts, custom, idx, warm, years, srcIn) {
   const w = normWeights(cfg.weights);
   const codes = Object.keys(w).filter(k => k !== 'CASH');
   const need = new Set([...codes, '0050', '00631L']);           // 對照組要用到 0050、00631L
-  const src = {};
-  for (const c of need) src[c] = { r: returnsFor(data, c, opts), s: signalReturnsFor(data, c, opts) };
+  const src = srcIn ?? Object.fromEntries([...need].map(c => [c, { r: returnsFor(data, c, opts), s: signalReturnsFor(data, c, opts) }]));
   const n = idx.length + 1;
   const R = {}, preps = {}, kind = {};
   for (const c of need) {
@@ -779,6 +782,7 @@ export async function rebalMonteCarlo(data, cfg, opts, custom, { n = 1000, years
   const codes = [...new Set([...Object.keys(w).filter(k => k !== 'CASH'), '0050', '00631L'])];
   // 可抽樣的日子：每一檔都有資料
   const rs = codes.map(c => [returnsFor(data, c, opts), signalReturnsFor(data, c, opts)]);
+  const src = Object.fromEntries(codes.map((c, i) => [c, { r: rs[i][0], s: rs[i][1] }]));
   const ok = [];
   for (let i = 0; i < data.days.length; i++) if (rs.every(([r, s]) => !Number.isNaN(r[i]) && !Number.isNaN(s[i]))) ok.push(i);
   if (ok.length < 600) throw new Error('可抽樣的資料太少');
@@ -793,7 +797,7 @@ export async function rebalMonteCarlo(data, cfg, opts, custom, { n = 1000, years
       for (let j = 0; j < L; j++) idx[i + j] = ok[(start + j) % N];
       i += L;
     }
-    rows.push(rebalMcPath(data, cfg, opts, custom, idx, warm, years));
+    rows.push(rebalMcPath(data, cfg, opts, custom, idx, warm, years, src));
     if ((k + 1) % chunk === 0 && onProgress) {
       if (onProgress((k + 1) / n) === false) return null;
       await new Promise(res => setTimeout(res, 0));

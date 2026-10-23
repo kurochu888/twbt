@@ -122,8 +122,10 @@ function buildControls() {
   const bindNum = (id, key, lo, hi) => $(id).addEventListener('input', () => {
     const v = Number($(id).value); if (Number.isFinite(v) && v >= lo && v <= hi) { state[key] = v; changed(); }
   });
-  $('start').addEventListener('change', () => { state.start = $('start').value; changed(); });
-  $('end').addEventListener('change', () => { state.end = $('end').value; changed(); });
+  // 日期欄位被清空時保留原本的日期（不然開始空白會變成從 1990 年、結束空白會算不出來）
+  const okDate = v => /^\d{4}-\d{2}-\d{2}$/.test(v);
+  $('start').addEventListener('change', () => { if (okDate($('start').value)) { state.start = $('start').value; changed(); } else $('start').value = state.start; });
+  $('end').addEventListener('change', () => { if (okDate($('end').value)) { state.end = $('end').value; changed(); } else $('end').value = state.end; });
   bindNum('rollYears', 'rollYears', 1, 30); bindNum('rndN', 'rndN', 10, 5000);
   bindNum('rndMin', 'rndMin', 0.5, 30); bindNum('rndMax', 'rndMax', 0.5, 30);
   bindNum('rndSeed', 'seed', -1e9, 1e9);
@@ -308,7 +310,10 @@ function renderRebalPeriod(cfg) {
   // 00631L 均線策略要等均線算得出來；比它早的起點，全部對照組一起延後，才是同一段期間比
   let aligned = null;
   const tr0 = E.trendPeriod(DATA, ['00631L'], s0, s1, opts(), state.trendCustom).results?.[0];
-  if (tr0?.shiftedFrom && tr0.shiftedFrom > s0) {
+  let trSkip = null;
+  // 只差均線暖身（一年內）才一起延後；差更多（例如只用真實資料、配置裡沒有正2）就不列 00631L 均線策略
+  if (tr0?.shiftedFrom && tr0.shiftedFrom > s0 && E.isoToDay(tr0.shiftedFrom) - E.isoToDay(s0) > 400) trSkip = tr0.shiftedFrom;
+  else if (tr0?.shiftedFrom && tr0.shiftedFrom > s0) {
     aligned = tr0.shiftedFrom;
     res = E.rebalPeriod(DATA, cfg, aligned, s1, opts(), state.trendCustom);
     if (res.error) { $('results').innerHTML = `<div class="warn">${esc(res.error)}</div>`; return; }
@@ -320,13 +325,14 @@ function renderRebalPeriod(cfg) {
   ];
   const bh = E.period(DATA, ['0050', '00631L'], s0, s1, opts());
   for (const r of bh.results || []) items.push({ k: r.code === '0050' ? 'bh50' : 'bh631', eq: r.equity, dayIdx: r.dayIdx });
-  const tr = E.trendPeriod(DATA, ['00631L'], s0, s1, opts(), state.trendCustom);
+  const tr = trSkip ? {} : E.trendPeriod(DATA, ['00631L'], s0, s1, opts(), state.trendCustom);
   if (tr.results?.[0]) items.push({ k: 'tr631', eq: tr.results[0].equity, dayIdx: tr.results[0].dayIdx, note: tr.results[0].shiftedFrom });
   for (const it of items) { const m = RB_ITEMS.find(x => x[0] === it.k); it.name = m[1]; it.color = css(m[2]); it.st = E.summarize(it.eq, it.dayIdx); }
   items.sort((a, b) => RB_ITEMS.findIndex(x => x[0] === a.k) - RB_ITEMS.findIndex(x => x[0] === b.k));
 
   const nReb = res.main.log.filter(l => l.what === '再平衡').length, nSig = res.main.log.length - nReb;
-  let html = aligned ? `<div class="warn">00631L 均線策略要先累積均線，最早 ${aligned} 才能開始；為了在同一段期間比較，全部從那天開始。</div>`
+  let html = trSkip ? `<div class="warn">00631L 均線策略在這段期間最早 ${trSkip} 才能開始，跟這個配置差太多，沒有列入比較。</div>` : '';
+  html += aligned ? `<div class="warn">00631L 均線策略要先累積均線，最早 ${aligned} 才能開始；為了在同一段期間比較，全部從那天開始。</div>`
     : res.shifted ? `<div class="warn">這個配置最早 ${res.shifted} 才有資料${cfg.trend ? '（正2 的均線要先累積）' : ''}，從那天開始。</div>` : '';
   html += `<section class="card"><h3>${esc(cfgLabel(cfg))}</h3>
     <p class="hint">${s0} ～ ${s1} · 再平衡 ${nReb} 次${cfg.trend ? ` · 均線訊號 ${nSig} 次` : ''} · 交易 ${res.main.trades} 筆 · 期末 ${moneyShort(res.stats.final)}</p>
@@ -844,7 +850,8 @@ function renderMCIdle() {
     if (mcLast.rebal) { mcLast.compare ? renderRbMCCompare(mcLast) : renderRbMC(mcLast); } else { mcLast.compare ? renderMCCompare(mcLast) : renderMC(mcLast); }
     return;
   }
-  $('results').innerHTML = `<div class="card"><p class="hint" style="margin:0">設定好之後按「開始模擬」。${state.mcN} 條大約要 ${Math.max(1, Math.round(state.mcN * codes().length * state.mcYears / 12000))} 秒（手機會慢一點）。</p></div>`;
+  const sec = state.strategy === 'rebal' ? state.mcN * state.mcYears / 5000 : state.mcN * codes().length * state.mcYears / 12000;
+  $('results').innerHTML = `<div class="card"><p class="hint" style="margin:0">設定好之後按「開始模擬」。${state.mcN} 條大約要 ${Math.max(1, Math.round(sec))} 秒（手機會慢一點）。</p></div>`;
 }
 
 async function runMC(compare) {

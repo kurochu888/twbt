@@ -18,7 +18,8 @@ class TaiwanCost:
     tax: dict = field(default_factory=lambda: dict(TAX))
 
     def fee(self, amount: float, kind: str) -> float:
-        if kind == "index" or amount <= 0:
+        # 免手續費（折扣 0）時連最低 20 元也不收
+        if kind == "index" or amount <= 0 or self.commission * self.discount <= 0:
             return 0.0
         return max(amount * self.commission * self.discount, self.min_fee)
 

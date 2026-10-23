@@ -67,7 +67,9 @@ def download(store: PriceStore, cli: TwseClient, today: date):
     # 除權息：逐年查詢
     done = store.done_months("exright")
     for y in range(EXRIGHT_START, today.year + 1):
-        if str(y) in done and y < today.year:
+        # 已抓過的年份不再抓；但 1 月時去年也重抓一次（12 月底除息那幾天排程剛好失敗的話才補得到）
+        recent_year = today.year - 1 if today.month == 1 else today.year
+        if str(y) in done and y < recent_year:
             continue
         ev = cli.exright(date(y, 1, 1), min(date(y, 12, 31), today), set(CORE))
         if not ev.empty:

@@ -43,7 +43,7 @@ class TestRebalance(unittest.TestCase):
         self.tmp.cleanup()
 
     def rb(self, cost=NO_COST):
-        bh = BuyHold(self.tmp.name, cost=cost, capital=1000)
+        bh = BuyHold(self.tmp.name, cost=cost, capital=1_000_000)
         return RebalBacktest(bh)
 
     def test_single_asset_no_rebalance_equals_buyhold(self):
@@ -57,34 +57,50 @@ class TestRebalance(unittest.TestCase):
         cfg = RebalConfig({"00631L": 0.5, "CASH": 0.5}, "M", 0, 0.0)
         eq = rb.run(cfg, self.dates[0], self.dates[-1])["策略"]
         # 1/31 漲一倍：500 → 1000，總值 1500；2/3（2 月第一個交易日）調回 750/750
-        self.assertAlmostEqual(eq["2020-01-31"], 1500)
+        self.assertAlmostEqual(eq["2020-01-31"], 1_500_000)
         # 2/28 跌一半：750 → 375，總值 1125；3/2 調回
-        self.assertAlmostEqual(eq["2020-02-28"], 1125)
-        self.assertAlmostEqual(eq.iloc[-1], 1125)
+        self.assertAlmostEqual(eq["2020-02-28"], 1_125_000)
+        self.assertAlmostEqual(eq.iloc[-1], 1_125_000)
         # 不再平衡：500 → 1000 → 500，總值回到 1000
         flat = rb.run(cfg, self.dates[0], self.dates[-1])["同配置不再平衡"]
-        self.assertAlmostEqual(flat.iloc[-1], 1000)
+        self.assertAlmostEqual(flat.iloc[-1], 1_000_000)
 
     def test_band(self):
         rb = self.rb()
         # 門檻 ±30 點：1/31 正2 變成 1000/1500 = 66.7%，偏離 16.7 點 < 30，不調 → 跟不再平衡一樣
         wide = rb.run(RebalConfig({"00631L": 0.5, "CASH": 0.5}, "none", 0.30, 0.0), self.dates[0], self.dates[-1])
-        self.assertAlmostEqual(wide["策略"].iloc[-1], 1000)
+        self.assertAlmostEqual(wide["策略"].iloc[-1], 1_000_000)
         # 門檻 ±10 點、每天檢查：1/31 當天就調回 750/750，2/28 跌一半 → 375 + 750
         tight = rb.run(RebalConfig({"00631L": 0.5, "CASH": 0.5}, "none", 0.10, 0.0), self.dates[0], self.dates[-1])
-        self.assertAlmostEqual(tight["策略"]["2020-02-28"], 1125)
+        self.assertAlmostEqual(tight["策略"]["2020-02-28"], 1_125_000)
 
     def test_cash_interest_and_costs(self):
         rb = self.rb()
         out = rb.run(RebalConfig({"0050": 0.0, "CASH": 1.0}, "none", 0, 0.01), self.dates[0], self.dates[-1])
         days = len(self.dates) - 1
-        self.assertAlmostEqual(out["策略"].iloc[-1], 1000 * 1.01 ** (days / 252))
+        self.assertAlmostEqual(out["策略"].iloc[-1], 1_000_000 * 1.01 ** (days / 252))
         rb2 = self.rb(TaiwanCost())
-        rb2.bh.capital = 1_000_000
         e = rb2.run(RebalConfig({"0050": 1.0}, "none", 0, 0.0), self.dates[0], self.dates[-1])["策略"]
         invested = 1_000_000 / 1.001425                          # 買進金額含手續費 = 100 萬
         self.assertAlmostEqual(e.iloc[0], invested)                 # 買進當天淨值 = 扣掉手續費後的市值
         self.assertAlmostEqual(e.iloc[-1], invested - invested * (0.001425 + 0.001), places=4)
+
+    def test_zero_fee_and_min_trade(self):
+        from twbt.backtest.rebalance import MIN_TRADE
+        free = TaiwanCost(discount=0)
+        self.assertEqual(free.buy_cost(1e6, "etf"), 0.0)                 # 免手續費：連最低 20 元也不收
+        self.assertAlmostEqual(free.sell_cost(1e6, "etf"), 1000.0)       # 證交稅照收
+        # 偏離很小時不交易：門檻 0、每月檢查，但 0050 不動、只有現金利息讓比例微幅偏離
+        rb = self.rb(TaiwanCost())
+        out = rb.run(RebalConfig({"0050": 0.5, "CASH": 0.5}, "M", 0, 0.01), self.dates[0], self.dates[-1])
+        self.assertEqual(out["交易次數"], 1)                              # 只有期初買進那一筆
+        self.assertGreater(MIN_TRADE, 100)
+
+    def test_all_cash(self):
+        rb = self.rb()
+        out = rb.run(RebalConfig({"CASH": 1.0}, "M", 0.05, 0.02), self.dates[0], self.dates[-1])   # 以前會當掉
+        self.assertAlmostEqual(out["策略"].iloc[-1], 1_000_000 * 1.02 ** ((len(self.dates) - 1) / 252))
+        self.assertEqual(out["交易次數"], 0)
 
     def test_exposure(self):
         self.assertAlmostEqual(RebalConfig({"00631L": 0.65, "CASH": 0.35}).exposure(), 1.3)

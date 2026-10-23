@@ -30,6 +30,7 @@ ASSETS = ["0050", "00631L", "00675L"]
 LEVERAGED = {"00631L", "00675L"}
 EXPOSURE = {"0050": 1.0, "00631L": 2.0, "00675L": 2.0, "CASH": 0.0}
 FREQ_NAME = {"none": "不定期", "M": "每月", "Q": "每季", "H": "每半年", "Y": "每年"}
+MIN_TRADE = 1000      # 再平衡時單筆不到 1,000 元就不交易（不然最低手續費 20 元會吃掉小額調整，現實中也沒人這樣做）
 
 
 @dataclass
@@ -112,18 +113,18 @@ class RebalBacktest:
             tw["CASH"] = 1 - sum(tw.values())
             return tw
 
-        def sell(c, amt):
+        def sell(c, amt, small_ok):
             nonlocal cash, trades
-            if amt <= 0:
+            if amt <= 0 or (amt < MIN_TRADE and not small_ok):
                 return
             cash += amt - cost.sell_cost(amt, KIND[c])
             h[c] -= amt
             trades += 1
 
-        def buy(c, amt):
+        def buy(c, amt, small_ok):
             nonlocal cash, trades
             amt = min(amt, cash)
-            if amt <= 0:
+            if amt <= 0 or (amt < MIN_TRADE and not small_ok):
                 return
             fee = cost.buy_cost(amt / (1 + rate), KIND[c])
             gross = amt - fee
@@ -133,17 +134,18 @@ class RebalBacktest:
             h[c] += gross
             trades += 1
 
-        def trade_to(tw, only=None):
+        def trade_to(tw, only=None, small_ok=False):
+            # small_ok：期初建立部位、均線訊號的進出不受 MIN_TRADE 限制；目標 0（出場）一定全部賣掉
             V = cash + sum(h.values())
             sel = [only] if only else codes
             for c in sel:
                 if h[c] > tw[c] * V:
-                    sell(c, h[c] - tw[c] * V)
+                    sell(c, h[c] - tw[c] * V, small_ok or tw[c] == 0)
             for c in sel:
                 if h[c] < tw[c] * V:
-                    buy(c, tw[c] * V - h[c])
+                    buy(c, tw[c] * V - h[c], small_ok)
 
-        trade_to(target(si))
+        trade_to(target(si), small_ok=True)
         eq = np.empty(ei - si + 1)
         eq[0] = cash + sum(h.values())
         last_key = _period_key(self.idx[si], cfg.freq)
@@ -158,7 +160,7 @@ class RebalBacktest:
                     if c in LEVERAGED:
                         g = self.tb._sig[c]
                         if g["act"][t - g["i0"]]:
-                            trade_to(tw, only=c)
+                            trade_to(tw, only=c, small_ok=True)
                             if keep_trades:
                                 log.append((self.idx[t], f"{c} 均線訊號"))
             # 定期／門檻
@@ -167,8 +169,7 @@ class RebalBacktest:
             last_key = key
             if check:
                 V = cash + sum(h.values())
-                dev = max(abs(h[c] / V - tw[c]) for c in codes)
-                dev = max(dev, abs(cash / V - tw["CASH"]))
+                dev = max([abs(h[c] / V - tw[c]) for c in codes] + [abs(cash / V - tw["CASH"])])   # 全部現金時 codes 是空的
                 if cfg.band <= 0 or dev > cfg.band + 1e-12:
                     trade_to(tw)
                     if keep_trades:
