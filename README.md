@@ -9,11 +9,26 @@
 - [x] **第 3 步：買進持有回測**：自訂區間、固定長度滾動、隨機區間，含手續費與證交稅
 - [ ] 第 4 步：定期定額、再平衡、擇時等策略
 
-## 在 Google Colab 使用
+## 怎麼用
 
-1. 把 `twbt-step3.zip`、`twbt_data.zip`、`twbt_colab.ipynb` 上傳到 Google 雲端硬碟「我的雲端硬碟」最外層。
-2. 在雲端硬碟點 `twbt_colab.ipynb`，選「用 Google Colaboratory 開啟」。
-3. 從上到下按 ▶ 執行。
+| 方式 | 適合 | 網址／做法 |
+|---|---|---|
+| **網頁** | 手機、電腦直接操作，不用寫程式 | <https://kurochu888.github.io/twbt/> |
+| **Colab** | 想改程式、做自己的分析 | 在 Colab 選「檔案 → 開啟筆記本 → GitHub」，輸入 `kurochu888/twbt`，選 `twbt_colab.ipynb` |
+| **自己電腦** | 離線使用 | 見最下方 |
+
+**資料自動更新**：GitHub Actions 每個交易日台灣時間 16:17 向證交所抓新資料、重算還原價與網頁資料，
+有變動才 commit（`.github/workflows/update-data.yml`）。檢查沒通過（例如有新的分割還沒登記）時不會更新網頁，
+排程會標成失敗並寄信通知。也可以在 GitHub 的 Actions 頁面手動按「Run workflow」。
+
+## 資料放在哪
+
+| 位置 | 內容 | 放進 git |
+|---|---|---|
+| `data/source/*.csv` | 證交所原始資料（個股日K、指數、除權息、下載紀錄） | ✓ |
+| `docs/data/returns.json` | 網頁用的每日報酬 | ✓ |
+| `data/twbt.db` | SQLite 資料庫（從 `data/source` 自動重建） | ✗ |
+| `data/adjusted/` | 還原價與長期模擬序列（`update_core.py --build-only` 幾秒重建） | ✗ |
 
 ## 資料涵蓋範圍
 
@@ -27,9 +42,9 @@
 
 模擬參數都用「真實資料重疊期間」校正，校正結果見 `adjusted/long/calibration.txt`。
 
-## 輸出檔案（在 `twbt_data/adjusted/`）
+## 還原價檔案（`data/adjusted/`）
 
-**真實資料**：`0050.csv`、`00631L.csv`、`00675L.csv`
+**`data/adjusted/` 的真實資料**：`0050.csv`、`00631L.csv`、`00675L.csv`
 
 | 欄位 | 說明 |
 |---|---|
@@ -49,7 +64,9 @@
 
 **大盤**：`TAIEX.csv`（加權指數 `close`、報酬指數 `tr_close`）、`long/TAIEX_long.csv`（含 1990 年起的含息報酬 `tr_ret`、`tr_index`）
 
-## 買進持有回測（筆記本第 5～8 格）
+## 買進持有回測
+
+網頁和 Colab 筆記本第 5～8 格功能相同（兩邊的計算已對照驗證，相對誤差 < 1e-8）。
 
 | 格子 | 功能 |
 |---|---|
@@ -65,7 +82,7 @@
 在 Python 裡使用：
 ```python
 from twbt.backtest import BuyHold, describe
-bh = BuyHold("twbt_data/adjusted")
+bh = BuyHold("data/adjusted")
 stats, curves = bh.period("2000-01-01", "2010-12-31")
 roll = bh.rolling(10)                  # 所有 10 年區間
 rnd = bh.random(500, (5, 15), seed=42) # 隨機 500 個 5～15 年區間
