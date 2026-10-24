@@ -1,6 +1,10 @@
 // 介面：讀設定 → 呼叫 engine.js 計算 → 畫結果
-import * as E from './engine.js';
-import { LineChart, ScatterChart } from './plot.js';
+import * as E from './engine.js?v=ce6cc9d598';
+import { LineChart, ScatterChart } from './plot.js?v=ce6cc9d598';
+
+// 版本號：tools/stamp_version.py 自動蓋上（日期 · 程式內容的 hash，跟 finance-app 一樣不手動編號）
+const BUILD_HASH = 'ce6cc9d598';
+const BUILD_DATE = '2026-10-24';
 
 const ORDER = ['TAIEX', '0050', '00631L', '00675L'];
 const LABEL = { TAIEX: '大盤（含息）', '0050': '0050', '00631L': '00631L 台灣50正2', '00675L': '00675L 加權正2' };
@@ -1086,9 +1090,38 @@ function renderMCCompare(m) {
     <p class="hint" style="margin-top:10px">怎麼看：每天打亂時，行情裡沒有趨勢，策略的報酬優勢應該消失；區塊越長、保留越多趨勢，策略越容易贏。真實台股在 1～6 個月的尺度上有趨勢延續，「約 3 個月」到「約半年」那兩列最接近現實。回撤比較小這件事在每一列都成立，是這個策略最穩的好處。</p></section>`;
 }
 
+// ---------- 版本檢查 ----------
+// 打開中的網頁回到前景、或每 30 分鐘問一次 version.json；換版了：能換就自動重新整理（設定都有存），不能換（正在輸入、蒙地卡羅跑到一半）就跳提示
+let newBuild = '';
+function updateSafeNow() {
+  const tag = document.activeElement?.tagName;
+  return !(tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') && !mcRunning;
+}
+async function checkForUpdate() {
+  if (!BUILD_HASH) return;
+  try {
+    const res = await fetch('version.json?t=' + Date.now(), { cache: 'no-store' });
+    if (!res.ok) return;
+    const j = await res.json();
+    if (j?.hash && j.hash !== BUILD_HASH) {
+      newBuild = j.hash;
+      let tried = null; try { tried = sessionStorage.getItem('twbt.autoUpdate'); } catch (_) { /* 無痕模式 */ }
+      if (updateSafeNow() && tried !== newBuild) {            // 同一個新版只自動換一次（快取沒換掉時不會一直重新整理）
+        try { sessionStorage.setItem('twbt.autoUpdate', newBuild); } catch (_) { /* 忽略 */ }
+        location.reload(); return;
+      }
+      $('updateBanner').hidden = false;
+    }
+  } catch (_) { /* 離線或暫時連不上，下次再問 */ }
+}
+
 // ---------- 啟動 ----------
 async function main() {
   restore();
+  $('buildVer').textContent = BUILD_HASH ? `網頁版本 ${BUILD_DATE} · ${BUILD_HASH}` : '網頁版本（未標記）';
+  $('updateBanner').addEventListener('click', () => location.reload());
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkForUpdate(); });
+  setInterval(checkForUpdate, 30 * 60 * 1000);
   try {
     const res = await fetch('data/returns.json', { cache: 'no-cache' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);

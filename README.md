@@ -94,6 +94,15 @@ rnd = bh.random(500, (5, 15), seed=42) # 隨機 500 個 5～15 年區間
 describe(roll)                         # 分布摘要
 ```
 
+## 版本號
+
+跟 finance-app 一樣不手動編號：**版本 = 日期 · 程式內容的 hash**（`tools/stamp_version.py`），程式一改就自動換。
+- 網頁最下方顯示「網頁版本」；打開中的網頁回到前景或每 30 分鐘檢查一次 `docs/version.json`，
+  有新版時能換就自動重新整理（設定都有存），正在輸入或蒙地卡羅跑到一半就在最上面跳「有新版本」提示
+- 改了 `docs/` 的程式要跑 `python tools/stamp_version.py`（測試 `tests/test_version.py` 會檢查；每日自動更新也會先補蓋）
+- Colab 第 2 格會印出程式版本，跟網頁上的一樣就是同一版
+- 資料每天更新，不算在版本號裡（網頁最上方另外顯示「資料更新至」哪一天）
+
 ## 均線趨勢策略（接刀）
 
 規則照 [kurochu888/finance-app](https://github.com/kurochu888/finance-app) 的 `computeTrend()` / `runBacktest()`（`twbt/backtest/trend.py`、`docs/engine.js`）：

@@ -32,6 +32,9 @@ jobs:
       - name: 安裝套件
         run: pip install -r requirements.txt
 
+      - name: 網頁版本號（程式有改卻沒蓋版本號時自動補上）
+        run: python tools/stamp_version.py
+
       - name: 測試
         run: python -m unittest discover tests
 
@@ -40,12 +43,12 @@ jobs:
 
       - name: 有變動就存回 repo
         run: |
-          if git diff --quiet -- data/source docs/data; then
+          if git diff --quiet -- data/source docs; then
             echo "資料沒有變動"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/source docs/data
+          git add data/source docs
           git commit -m "每日資料更新 $(TZ=Asia/Taipei date +%Y-%m-%d)"
           git push

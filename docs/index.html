@@ -11,9 +11,10 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=ce6cc9d598">
 </head>
 <body>
+<button class="update-banner" id="updateBanner" type="button" hidden>🔄 有新版本，點這裡更新</button>
 <header class="top">
   <div class="wrap">
     <h1>台股回測</h1>
@@ -308,10 +309,11 @@
       </ul>
     </details>
 
+    <p class="hint" id="buildVer"></p>
     <p class="hint">僅供研究參考，不構成投資建議。原始碼：<a href="https://github.com/kurochu888/twbt">github.com/kurochu888/twbt</a></p>
   </section>
 </main>
 
-<script type="module" src="app.js"></script>
+<script type="module" src="app.js?v=ce6cc9d598"></script>
 </body>
 </html>
