@@ -38,6 +38,11 @@ let DATA = null;
 const charts = {};
 
 // ---------- 小工具 ----------
+// 數字欄位：空白或不是數字 → null（不動）；超出範圍 → 改成最接近的允許值（不再默默忽略）
+const clampNum = (raw, lo, hi) => {
+  if (String(raw).trim() === '') return null;
+  const v = Number(raw); return Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : null;
+};
 const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const color = code => css(`--c-${code}`);
 function pct(x, d = 1, sign = false) {
@@ -120,9 +125,10 @@ function buildControls() {
   $('discount').addEventListener('change', () => { state.discount = +$('discount').value; changed(); });
   $('useSyn').addEventListener('change', () => { state.useSyn = $('useSyn').checked; changed(); });
   $('excess').addEventListener('change', () => { state.excess = $('excess').checked; changed(); });
-  const bindNum = (id, key, lo, hi) => $(id).addEventListener('input', () => {
-    const v = Number($(id).value); if (Number.isFinite(v) && v >= lo && v <= hi) { state[key] = v; changed(); }
-  });
+  const bindNum = (id, key, lo, hi) => {
+    $(id).addEventListener('input', () => { const v = clampNum($(id).value, lo, hi); if (v !== null) { state[key] = v; changed(); } });
+    $(id).addEventListener('change', () => { $(id).value = state[key]; });
+  };
   // 日期欄位被清空時保留原本的日期（不然開始空白會變成從 1990 年、結束空白會算不出來）
   const okDate = v => /^\d{4}-\d{2}-\d{2}$/.test(v);
   $('start').addEventListener('change', () => { if (okDate($('start').value)) { state.start = $('start').value; changed(); } else $('start').value = state.start; });
@@ -152,9 +158,8 @@ function buildControls() {
   for (const [id, key, lo, hi] of [['mcN', 'mcN', 100, MC_MAX], ['mcYears', 'mcYears', 1, 30], ['mcSeed', 'mcSeed', -1e9, 1e9]]) {
     $(id).value = state[key];
     $(id).addEventListener('input', () => {
-      const raw = $(id).value; if (raw === '') return;
-      const v = Number(raw); if (!Number.isFinite(v)) return;
-      state[key] = Math.round(Math.min(hi, Math.max(lo, v))); save(); run();
+      const v = clampNum($(id).value, lo, hi); if (v === null) return;
+      state[key] = Math.round(v); save(); run();
     });
     $(id).addEventListener('change', () => { $(id).value = state[key]; });
   }
@@ -180,13 +185,17 @@ function buildParams() {
   $('params').oninput = e => {
     const inp = e.target.closest('input'); if (!inp) return;
     const [k, , , lo, hi] = PARAM_FIELDS.find(f => f[0] === inp.dataset.k);
-    const lev = +inp.dataset.lev, v = Number(inp.value);
-    if (!Number.isFinite(v) || v < lo || v > hi) return;
+    const lev = +inp.dataset.lev, v = clampNum(inp.value, lo, hi);
+    if (v === null) return;
     const int = ['maFast', 'maSlow', 'pyramidLevels'].includes(k);
     const vv = int ? Math.round(v) : v;
     if (vv === D[lev][k]) delete state.trendCustom[lev][k]; else state.trendCustom[lev][k] = vv;
     inp.classList.toggle('changed', state.trendCustom[lev][k] !== undefined);
     changed();
+  };
+  $('params').onchange = e => {
+    const inp = e.target.closest('input'); if (!inp) return;
+    inp.value = state.trendCustom[+inp.dataset.lev][inp.dataset.k] ?? D[+inp.dataset.lev][inp.dataset.k];
   };
 }
 
@@ -252,8 +261,10 @@ function buildRebalControls() {
   drawWeights();
   $('rbFreq').value = state.rbFreq; $('rbBand').value = state.rbBand; $('rbCash').value = state.rbCash; $('rbTrend').checked = state.rbTrend;
   $('rbFreq').addEventListener('change', () => { state.rbFreq = $('rbFreq').value; ruleText(); changed(); });
-  $('rbBand').addEventListener('input', () => { const v = Number($('rbBand').value); if (v >= 0 && v <= 50) { state.rbBand = v; ruleText(); changed(); } });
-  $('rbCash').addEventListener('input', () => { const v = Number($('rbCash').value); if (v >= 0 && v <= 10) { state.rbCash = v; changed(); } });
+  $('rbBand').addEventListener('input', () => { const v = clampNum($('rbBand').value, 0, 50); if (v !== null) { state.rbBand = v; ruleText(); changed(); } });
+  $('rbCash').addEventListener('input', () => { const v = clampNum($('rbCash').value, 0, 10); if (v !== null) { state.rbCash = v; changed(); } });
+  $('rbBand').addEventListener('change', () => { $('rbBand').value = state.rbBand; });
+  $('rbCash').addEventListener('change', () => { $('rbCash').value = state.rbCash; });
   $('rbTrend').addEventListener('change', () => { state.rbTrend = $('rbTrend').checked; syncStrategyUI(); changed(); });
   ruleText();
 }
@@ -262,9 +273,10 @@ function drawWeights() {
     <input type="number" inputmode="decimal" min="0" max="100" step="5" data-k="${k}" value="${state.rbWeights[k] || 0}"></label>`).join('');
   $('rbWeights').oninput = e => {
     const inp = e.target.closest('input'); if (!inp) return;
-    const v = Number(inp.value); if (!(v >= 0 && v <= 100)) return;
+    const v = clampNum(inp.value, 0, 100) ?? 0;          // 空白 = 0%
     state.rbWeights[inp.dataset.k] = v; sumText(); changed();
   };
+  $('rbWeights').onchange = e => { const inp = e.target.closest('input'); if (inp) inp.value = state.rbWeights[inp.dataset.k] || 0; };
   sumText();
 }
 function sumText() {
