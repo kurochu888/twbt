@@ -203,6 +203,10 @@ details.more summary { cursor: pointer; color: var(--accent); font-size: 13.5px;
 @media (max-width: 380px) {
   .grid2 { grid-template-columns: 1fr; }
 }
+/* 很窄的手機（320px）：均線卡片有「策略／買進持有」兩欄數字，兩張並排會超出螢幕 → 一張一列 */
+@media (max-width: 350px) {
+  .cards.trend-cards { grid-template-columns: 1fr; }
+}
 
 /* SVG 圖表 */
 .chart-box svg { display: block; touch-action: pan-y; }

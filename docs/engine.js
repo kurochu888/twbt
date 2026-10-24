@@ -602,6 +602,7 @@ export function mcSummary(rows) {
 export const REBAL_ASSETS = ['0050', '00631L', '00675L'];
 const LEVERAGED = new Set(['00631L', '00675L']);
 const MIN_TRADE = 1000;   // 再平衡時單筆不到 1,000 元就不交易（跟 Python 版一樣）
+const DUST = 0.01;          // 不到 1 分錢不交易（浮點誤差的零頭）
 export const EXPOSURE = { '0050': 1, '00631L': 2, '00675L': 2, CASH: 0 };
 
 export function normWeights(weights) {
@@ -661,9 +662,10 @@ function rebalSim(data, ctx, cfg, si, ei, opts, keepLog) {
     tw.CASH = 1 - s; return tw;
   };
   const kind = c => (ctx.kind ? ctx.kind[c] : data.assets[c].kind);
-  const sell = (c, amt, smallOk) => { if (amt <= 0 || (amt < MIN_TRADE && !smallOk)) return; cash += amt - cost.sell(amt, kind(c)); h[c] -= amt; trades++; };
+  // 不到 1 分錢的「交易」是浮點誤差留下的零頭，不算（不然免手續費時會多算交易次數，Python／網頁也可能不同）
+  const sell = (c, amt, smallOk) => { if (amt < DUST || (amt < MIN_TRADE && !smallOk)) return; cash += amt - cost.sell(amt, kind(c)); h[c] -= amt; trades++; };
   const buy = (c, amt, smallOk) => {
-    amt = Math.min(amt, cash); if (amt <= 0 || (amt < MIN_TRADE && !smallOk)) return;
+    amt = Math.min(amt, cash); if (amt < DUST || (amt < MIN_TRADE && !smallOk)) return;
     const fee = cost.buy(amt / (1 + rate), kind(c)), gross = amt - fee;
     if (gross <= 0) return;
     cash -= amt; h[c] += gross; trades++;

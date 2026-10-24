@@ -30,6 +30,7 @@ ASSETS = ["0050", "00631L", "00675L"]
 LEVERAGED = {"00631L", "00675L"}
 EXPOSURE = {"0050": 1.0, "00631L": 2.0, "00675L": 2.0, "CASH": 0.0}
 FREQ_NAME = {"none": "不定期", "M": "每月", "Q": "每季", "H": "每半年", "Y": "每年"}
+DUST = 0.01           # 不到 1 分錢的「交易」是浮點誤差留下的零頭，不算（免手續費時會多算交易次數）
 MIN_TRADE = 1000      # 再平衡時單筆不到 1,000 元就不交易（不然最低手續費 20 元會吃掉小額調整，現實中也沒人這樣做）
 
 
@@ -119,7 +120,7 @@ class RebalBacktest:
 
         def sell(c, amt, small_ok):
             nonlocal cash, trades
-            if amt <= 0 or (amt < MIN_TRADE and not small_ok):
+            if amt < DUST or (amt < MIN_TRADE and not small_ok):
                 return
             cash += amt - cost.sell_cost(amt, KIND[c])
             h[c] -= amt
@@ -128,7 +129,7 @@ class RebalBacktest:
         def buy(c, amt, small_ok):
             nonlocal cash, trades
             amt = min(amt, cash)
-            if amt <= 0 or (amt < MIN_TRADE and not small_ok):
+            if amt < DUST or (amt < MIN_TRADE and not small_ok):
                 return
             fee = cost.buy_cost(amt / (1 + rate), KIND[c])
             gross = amt - fee

@@ -738,7 +738,7 @@ function renderTrendPeriod(res) {
   if (shifted.length) html += `<div class="warn">均線要先累積 ${Math.max(...shifted.map(r => Math.max(r.params.maFast, r.params.maSlow)))} 個交易日才算得出來，之前策略只能觀望，跟買進持有比不公平。所以這幾檔改從均線算得出來的那天開始（策略和買進持有同一天）：${shifted.map(r => `${SHORT[r.code]} ${r.shiftedFrom}`).join('、')}</div>`;
   if (!R.some(r => r.code === state.chartAsset)) state.chartAsset = R[0].code;
 
-  html += `<div class="cards">${R.map(r => {
+  html += `<div class="cards trend-cards">${R.map(r => {
     const s = r.stats, b = r.bh, n = r.events.length;
     const line = (k, a, bb, f, signed) => `<span class="k">${k}</span><span class="v ${signed ? cls(a) : ''}">${f(a)}</span><span class="v bh">${f(bb)}</span>`;
     return `<article class="acard" style="--c:${color(r.code)}">
