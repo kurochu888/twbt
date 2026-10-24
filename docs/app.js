@@ -9,6 +9,7 @@ const DAY_MS = 86400000;
 const STORE_KEY = 'twbt.settings.v1';
 
 const $ = id => document.getElementById(id);
+const MC_MAX = 20000;   // 蒙地卡羅最多幾條
 const state = {
   mode: 'period', assets: new Set(ORDER), capital: 1_000_000, discount: 1, useSyn: true, excess: true,
   start: '2000-01-01', end: '', rollYears: 10, rndN: 500, rndMin: 5, rndMax: 15, seed: 42,
@@ -147,9 +148,15 @@ function buildControls() {
   syncStrategyUI();
 
   // 蒙地卡羅：改設定不自動跑（比較久），按按鈕才跑
-  for (const [id, key, lo, hi] of [['mcN', 'mcN', 100, 5000], ['mcYears', 'mcYears', 1, 30], ['mcSeed', 'mcSeed', -1e9, 1e9]]) {
+  // 超出範圍不再默默忽略：自動改成最接近的允許值，離開欄位時把實際用的數字顯示回去
+  for (const [id, key, lo, hi] of [['mcN', 'mcN', 100, MC_MAX], ['mcYears', 'mcYears', 1, 30], ['mcSeed', 'mcSeed', -1e9, 1e9]]) {
     $(id).value = state[key];
-    $(id).addEventListener('input', () => { const v = Number($(id).value); if (Number.isFinite(v) && v >= lo && v <= hi) { state[key] = Math.round(v); save(); run(); } });
+    $(id).addEventListener('input', () => {
+      const raw = $(id).value; if (raw === '') return;
+      const v = Number(raw); if (!Number.isFinite(v)) return;
+      state[key] = Math.round(Math.min(hi, Math.max(lo, v))); save(); run();
+    });
+    $(id).addEventListener('change', () => { $(id).value = state[key]; });
   }
   $('mcBlock').value = String(state.mcBlock);
   $('mcBlock').addEventListener('change', () => { state.mcBlock = +$('mcBlock').value; save(); run(); });
@@ -851,7 +858,7 @@ function renderMCIdle() {
     return;
   }
   const sec = state.strategy === 'rebal' ? state.mcN * state.mcYears / 5000 : state.mcN * codes().length * state.mcYears / 12000;
-  $('results').innerHTML = `<div class="card"><p class="hint" style="margin:0">設定好之後按「開始模擬」。${state.mcN} 條大約要 ${Math.max(1, Math.round(sec))} 秒（手機會慢一點）。</p></div>`;
+  $('results').innerHTML = `<div class="card"><p class="hint" style="margin:0">設定好之後按「開始模擬」。${state.mcN.toLocaleString()} 條大約要 ${Math.max(1, Math.round(sec))} 秒（手機會慢一點）。最多 ${MC_MAX.toLocaleString()} 條；「比較各種區塊長度」要跑 5 組，每組最多 ${state.strategy === 'rebal' ? 500 : 1000} 條。</p></div>`;
 }
 
 async function runMC(compare) {
