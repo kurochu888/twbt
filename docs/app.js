@@ -24,7 +24,8 @@ const RB_PRESETS = [
   ['0050 50% ＋ 00631L 50%', { '0050': 50, '00631L': 50, '00675L': 0, CASH: 0 }],
 ];
 const RB_NAMES = { '0050': '0050', '00631L': '00631L', '00675L': '00675L', CASH: '現金' };
-let mcLast = null, mcToken = 0;   // 上一次蒙地卡羅結果（設定一樣才顯示）、執行中的代號（換設定就作廢）
+// 上一次蒙地卡羅結果（設定一樣才顯示）、執行中的代號（換設定就作廢）、執行中那次的設定（設定沒變就不中斷）
+let mcLast = null, mcToken = 0, mcRunning = null;
 const PARAM_FIELDS = [
   ['maFast', '快線（日）', 1, 2, 500],
   ['maSlow', '慢線（日）', 1, 2, 500],
@@ -298,7 +299,7 @@ function rbCfg() {
 function runRebal() {
   let cfg;
   try { cfg = rbCfg(); E.normWeights(cfg.weights); } catch (err) { destroyCharts(); $('results').innerHTML = `<div class="warn">${esc(err.message)}</div>`; return; }
-  if (state.mode === 'mc') { mcToken++; renderMCIdle(); return; }
+  if (state.mode === 'mc') { if (mcRunning && mcRunning.key === mcKey(mcRunning.compare)) return; mcToken++; renderMCIdle(); return; }
   if (state.mode === 'period') return renderRebalPeriod(cfg);
   let wins, title;
   if (state.mode === 'rolling') { wins = E.rollingWins(DATA, state.rollYears); title = `${state.rollYears} 年滾動區間（每個月初一個起點）`; }
@@ -311,9 +312,10 @@ function runRebal() {
 
 // 對照組：名稱、顏色
 const RB_ITEMS = [
-  ['main', '再平衡策略', '--text'], ['flat', '同配置不再平衡', '--muted'], ['bh50', '0050 買進持有', '--c-0050'],
+  ['main', '再平衡策略', '--text'], ['noTr', '同配置不搭配均線', '--c-00675L'], ['flat', '同配置不再平衡', '--muted'], ['bh50', '0050 買進持有', '--c-0050'],
   ['bh631', '00631L 買進持有', '--c-alt'], ['tr631', '00631L 均線策略', '--c-00631L'],
 ];
+const hasTrendEffect = cfg => cfg.trend && Object.keys(E.normWeights(cfg.weights)).some(k => k === '00631L' || k === '00675L');
 function cfgLabel(cfg) {
   const w = E.normWeights(cfg.weights);
   const mix = Object.entries(w).map(([k, v]) => `${RB_NAMES[k]} ${Math.round(v * 100)}%`).join(' ＋ ');
@@ -342,6 +344,11 @@ function renderRebalPeriod(cfg) {
     { k: 'main', eq: res.main.eq, dayIdx: res.dayIdx },
     { k: 'flat', eq: res.flat.eq, dayIdx: res.dayIdx },
   ];
+  // 搭配均線時，多列一行「同樣配置和規則、但不搭配均線」，直接看出均線的效果
+  if (hasTrendEffect(cfg)) {
+    const nt = E.rebalPeriod(DATA, { ...cfg, trend: false }, s0, s1, opts(), state.trendCustom);
+    if (!nt.error) items.push({ k: 'noTr', eq: nt.main.eq, dayIdx: nt.dayIdx });
+  }
   const bh = E.period(DATA, ['0050', '00631L'], s0, s1, opts());
   for (const r of bh.results || []) items.push({ k: r.code === '0050' ? 'bh50' : 'bh631', eq: r.equity, dayIdx: r.dayIdx });
   const tr = trSkip ? {} : E.trendPeriod(DATA, ['00631L'], s0, s1, opts(), state.trendCustom);
@@ -412,10 +419,13 @@ function renderRebalMulti(cfg, wins, title) {
   const bh = new Map(), tr = new Map();
   for (const r of E.windows(DATA, ['0050', '00631L'], wins, opts())) bh.set(r.code + key(r), r);
   for (const r of E.trendWindows(DATA, ['00631L'], wins, opts(), state.trendCustom)) tr.set(key(r), r);
+  const nt = new Map();
+  if (hasTrendEffect(cfg)) for (const r of E.rebalWindows(DATA, { ...cfg, trend: false }, wins, opts(), state.trendCustom)) nt.set(key(r), r);
   for (const r of rows) {
     const a = bh.get('0050' + key(r)), b = bh.get('00631L' + key(r)), c = tr.get(key(r));
     r.bh50Cagr = a?.cagr ?? null; r.bh50Mdd = a?.mdd ?? null; r.bh631Cagr = b?.cagr ?? null; r.bh631Mdd = b?.mdd ?? null;
     r.tr631Cagr = c?.cagr ?? null; r.tr631Mdd = c?.mdd ?? null;
+    const d = nt.get(key(r)); r.noTrCagr = d?.cagr ?? null; r.noTrMdd = d?.mdd ?? null;
   }
   const sets = RB_ITEMS.map(([k]) => {
     const g = k === 'main' ? rows : rows.filter(r => r[k + 'Cagr'] != null);
@@ -428,7 +438,7 @@ function renderRebalMulti(cfg, wins, title) {
     return { label: meta[1], color: css(meta[2]), s: { min: arr[0], max: arr[arr.length - 1], p5: q(.05), p25: q(.25), p50: q(.5), p75: q(.75), p95: q(.95) } };
   });
   $('results').innerHTML = `<section class="card"><h3>${esc(title)}</h3><p class="hint">${esc(cfgLabel(cfg))} · 共 ${rows.length} 段（對照組只算同一段期間有資料的）</p>
-      ${winLine(rows, ['flat', 'bh50', 'bh631', 'tr631'])}
+      ${winLine(rows, ['noTr', 'flat', 'bh50', 'bh631', 'tr631'])}
       ${rebalCompareTable(sets)}</section>
     <section class="card"><div class="chart-head"><h3>分布</h3>
       <div class="seg" id="metricSeg">${['cagr', 'mdd'].map(k => `<button type="button" data-m="${k}" aria-pressed="${k === m}">${METRICS[k].label}</button>`).join('')}</div></div>
@@ -437,7 +447,7 @@ function renderRebalMulti(cfg, wins, title) {
 }
 
 function runTrend() {
-  if (state.mode === 'mc') { mcToken++; renderMCIdle(); return; }
+  if (state.mode === 'mc') { if (mcRunning && mcRunning.key === mcKey(mcRunning.compare)) return; mcToken++; renderMCIdle(); return; }
   if (!codes().length) { destroyCharts(); $('results').innerHTML = '<div class="warn">請至少選一檔 0050、00631L 或 00675L（大盤不能交易，不跑策略）。</div>'; return; }
   if (state.mode === 'period') {
     renderTrendPeriod(E.trendPeriod(DATA, codes(), state.start, state.end, opts(), state.trendCustom));
@@ -876,7 +886,7 @@ function renderMCIdle() {
 async function runMC(compare) {
   if (state.strategy === 'rebal') return runRbMC(compare);
   if (!codes().length) { $('results').innerHTML = '<div class="warn">請至少選一檔 0050、00631L 或 00675L。</div>'; return; }
-  const token = ++mcToken;
+  const token = ++mcToken; mcRunning = { key: mcKey(compare), compare };
   const blocks = compare ? [1, 20, 60, 120, 250] : [state.mcBlock];
   const n = compare ? Math.min(state.mcN, 1000) : state.mcN;
   const jobs = blocks.flatMap(b => codes().map(c => [b, c]));
@@ -900,6 +910,7 @@ async function runMC(compare) {
     $('results').innerHTML = `<div class="warn">${esc(err.message)}</div>`; return;
   } finally {
     $('mcRun').disabled = $('mcCompare').disabled = false;
+    if (token === mcToken) mcRunning = null;
   }
   mcLast = { key: mcKey(compare), compare, out, n, years: state.mcYears, block: state.mcBlock };
   $('status').textContent = `模擬 ${out.length * n} 條，${(Math.round(performance.now() - t0) / 1000).toFixed(1)} 秒`;
@@ -909,7 +920,7 @@ async function runMC(compare) {
 async function runRbMC(compare) {
   let cfg;
   try { cfg = rbCfg(); E.normWeights(cfg.weights); } catch (err) { $('results').innerHTML = `<div class="warn">${esc(err.message)}</div>`; return; }
-  const token = ++mcToken;
+  const token = ++mcToken; mcRunning = { key: mcKey(compare), compare };
   const blocks = compare ? [1, 20, 60, 120, 250] : [state.mcBlock];
   const n = compare ? Math.min(state.mcN, 500) : state.mcN;
   destroyCharts();
@@ -922,24 +933,25 @@ async function runRbMC(compare) {
       const res = await E.rebalMonteCarlo(DATA, cfg, opts(), state.trendCustom, { n, years: state.mcYears, block, seed: state.mcSeed + block }, f => {
         if (token !== mcToken) return false;
         $('mcBar').style.width = `${((j + f) / blocks.length) * 100}%`;
-        $('mcProg').textContent = `每段${BLOCK_LABEL[block]} · ${Math.round(f * n)} / ${n}（每條同時算再平衡、不再平衡、0050 持有、00631L 均線）`;
+        $('mcProg').textContent = `每段${BLOCK_LABEL[block]} · ${Math.round(f * n)} / ${n}（每條同時算再平衡、對照組）`;
       });
       if (!res || token !== mcToken) return;
       out.push({ block, ...res });
     }
   } catch (err) { $('results').innerHTML = `<div class="warn">${esc(err.message)}</div>`; return; }
-  finally { $('mcRun').disabled = $('mcCompare').disabled = false; }
+  finally { $('mcRun').disabled = $('mcCompare').disabled = false; if (token === mcToken) mcRunning = null; }
   mcLast = { key: mcKey(compare), compare, rebal: true, cfg, out, n, years: state.mcYears, block: state.mcBlock };
   $('status').textContent = `模擬 ${out.length * n} 條，${(Math.round(performance.now() - t0) / 1000).toFixed(1)} 秒`;
   compare ? renderRbMCCompare(mcLast) : renderRbMC(mcLast);
 }
-const RB_MC_KEYS = [['main', 'cagr', 'mdd'], ['flat', 'flatCagr', 'flatMdd'], ['bh50', 'bhCagr', 'bhMdd'], ['tr631', 'trCagr', 'trMdd']];
+const RB_MC_KEYS = [['main', 'cagr', 'mdd'], ['noTr', 'noTrCagr', 'noTrMdd'], ['flat', 'flatCagr', 'flatMdd'], ['bh50', 'bhCagr', 'bhMdd'], ['tr631', 'trCagr', 'trMdd']];
 function renderRbMC(m) {
   destroyCharts();
   const o = m.out[0], rows = o.rows, n = rows.length;
-  const sets = RB_MC_KEYS.map(([k, c, d]) => ({ k, cagr: rows.map(r => r[c]), mdd: rows.map(r => r[d]) }));
+  const keys = RB_MC_KEYS.filter(([, c]) => rows[0]?.[c] !== undefined);   // 沒搭配均線時沒有「不搭配均線」那一組
+  const sets = keys.map(([k, c, d]) => ({ k, cagr: rows.map(r => r[c]), mdd: rows.map(r => r[d]) }));
   const share = f => pct(rows.filter(f).length / n, 0);
-  const vs = RB_MC_KEYS.slice(1).map(([k, c, d]) => `${RB_ITEMS.find(x => x[0] === k)[1]}：報酬贏 <b>${share(r => r.cagr > r[c])}</b>、回撤小 <b>${share(r => r.mdd > r[d])}</b>`).join('<br>');
+  const vs = keys.slice(1).map(([k, c, d]) => `${RB_ITEMS.find(x => x[0] === k)[1]}：報酬贏 <b>${share(r => r.cagr > r[c])}</b>、回撤小 <b>${share(r => r.mdd > r[d])}</b>`).join('<br>');
   $('results').innerHTML = `<section class="card"><h3>${n.toLocaleString()} 條 ${m.years} 年模擬行情 · 每段${BLOCK_LABEL[m.block]}</h3>
     <p class="hint">${esc(cfgLabel(m.cfg))} · 取樣 ${o.from}～${o.to}${state.useSyn ? '（含上市前模擬）' : '（只用真實資料）'}。模擬行情沒有日曆，「每季」用 63 個交易日近似。</p>
     <p class="hint">策略 vs ${vs}</p>
@@ -959,10 +971,10 @@ function renderRbMCCompare(m) {
   const q = (a, p) => E.quantile([...a].sort((x, y) => x - y), p);
   $('results').innerHTML = `<section class="card"><h3>各種區塊長度比較（每組 ${m.n.toLocaleString()} 條 ${m.years} 年）</h3>
     <p class="hint">${esc(cfgLabel(m.cfg))}。每格上面是再平衡策略的年化中位數 / 回撤中位數，下面是報酬贏過對照組的機率。</p>
-    <div class="tbl-wrap"><table class="cmp-tbl"><thead><tr><th>每段</th><th>再平衡策略</th><th>vs 不再平衡</th><th>vs 0050 持有</th><th>vs 00631L 均線</th></tr></thead><tbody>
+    <div class="tbl-wrap"><table class="cmp-tbl"><thead><tr><th>每段</th><th>再平衡策略</th>${m.out[0].rows[0]?.noTrCagr !== undefined ? '<th>vs 不搭配均線</th>' : ''}<th>vs 不再平衡</th><th>vs 0050 持有</th><th>vs 00631L 均線</th></tr></thead><tbody>
     ${m.out.map(o => { const r = o.rows; return `<tr><td class="lbl">${BLOCK_LABEL[o.block]}</td>
       <td class="n pair"><b>${pct(q(r.map(x => x.cagr), .5), 1, true)}</b><small>${pct(q(r.map(x => x.mdd), .5), 0)}</small></td>
-      ${[['flatCagr', 'flatMdd'], ['bhCagr', 'bhMdd'], ['trCagr', 'trMdd']].map(([c, d]) => `<td class="n pair"><b>${pc(r, x => x.cagr > x[c])}</b><small>回撤小 ${pc(r, x => x.mdd > x[d])}</small></td>`).join('')}</tr>`; }).join('')}
+      ${[...(r[0]?.noTrCagr !== undefined ? [['noTrCagr', 'noTrMdd']] : []), ['flatCagr', 'flatMdd'], ['bhCagr', 'bhMdd'], ['trCagr', 'trMdd']].map(([c, d]) => `<td class="n pair"><b>${pc(r, x => x.cagr > x[c])}</b><small>回撤小 ${pc(r, x => x.mdd > x[d])}</small></td>`).join('')}</tr>`; }).join('')}
     </tbody></table></div></section>`;
 }
 

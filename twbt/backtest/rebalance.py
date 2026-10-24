@@ -199,6 +199,9 @@ class RebalBacktest:
         out = {"策略": pd.Series(eq, index=idx), "交易次數": trades, "紀錄": log}
         flat = RebalConfig(cfg.weights, "none", 0.0, cfg.cash_rate, cfg.trend)
         out["同配置不再平衡"] = pd.Series(self.simulate(flat, si, ei)[0], index=idx)
+        if cfg.trend and any(c in LEVERAGED for c in cfg.norm()):      # 直接看出均線的效果
+            nt = RebalConfig(cfg.weights, cfg.freq, cfg.band, cfg.cash_rate, False)
+            out["同配置不搭配均線"] = pd.Series(self.simulate(nt, si, ei)[0], index=idx)
         return out
 
     def windows(self, cfg: RebalConfig, wins) -> pd.DataFrame:

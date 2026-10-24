@@ -789,8 +789,14 @@ export function rebalMcPath(data, cfg, opts, custom, idx, warm, yearsIn, srcIn) 
   const bh = res(rebalSim(data, mk(bhCfg, ['0050']), bhCfg, warm, ei, opts, false).eq);
   const trCfg = { weights: { '00631L': 1 }, freq: 'none', band: 0, cashRate: 0, trend: true };
   const tr = res(rebalSim(data, mk(trCfg, ['00631L']), trCfg, warm, ei, opts, false).eq);
-  return { cagr: main.cagr, mdd: main.mdd, flatCagr: flat.cagr, flatMdd: flat.mdd,
+  const out = { cagr: main.cagr, mdd: main.mdd, flatCagr: flat.cagr, flatMdd: flat.mdd,
     bhCagr: bh.cagr, bhMdd: bh.mdd, trCagr: tr.cagr, trMdd: tr.mdd };
+  if (cfg.trend && codes.some(c => LEVERAGED.has(c))) {          // 同配置、同規則、不搭配均線
+    const ntCfg = { ...cfg, trend: false };
+    const nt = res(rebalSim(data, mk(ntCfg, codes), ntCfg, warm, ei, opts, false).eq);
+    out.noTrCagr = nt.cagr; out.noTrMdd = nt.mdd;
+  }
+  return out;
 }
 
 export async function rebalMonteCarlo(data, cfg, opts, custom, { n = 1000, years = 10, block = 120, seed = 1, chunk = 25 } = {}, onProgress) {
