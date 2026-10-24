@@ -18,6 +18,8 @@ const state = {
   mcN: 1000, mcYears: 10, mcSeed: 1, mcBlock: 120, mcMetric: 'cagr',
   rbWeights: { '0050': 0, '00631L': 50, '00675L': 0, CASH: 50 }, rbFreq: 'Q', rbBand: 5, rbCash: 1, rbTrend: false,
 };
+const DEFAULTS = { ...state, assets: new Set(ORDER), rbWeights: { ...state.rbWeights } };
+
 const RB_PRESETS = [
   ['00631L 50% ＋ 現金', { '0050': 0, '00631L': 50, '00675L': 0, CASH: 50 }],
   ['00631L 65% ＋ 現金（約 1.3 倍）', { '0050': 0, '00631L': 65, '00675L': 0, CASH: 35 }],
@@ -77,6 +79,42 @@ function restore() {
       rbWeights: { '0050': 0, '00631L': 0, '00675L': 0, CASH: 0, ...(s.rbWeights || { '00631L': 50, CASH: 50 }) },
     });
   } catch (_) { /* 忽略 */ }
+  sanitize();
+}
+// 存檔可能是舊版或壞掉的：每個值都檢查，不合法就用預設值、超出範圍就夾到範圍內
+function sanitize() {
+  const D = DEFAULTS;
+  const num = (k, lo, hi, int = false) => {
+    const v = Number(state[k]);
+    state[k] = Number.isFinite(v) && state[k] !== '' && state[k] !== null && typeof state[k] !== 'boolean' ? Math.min(hi, Math.max(lo, int ? Math.round(v) : v)) : D[k];
+  };
+  const pick = (k, list) => { if (!list.includes(state[k])) state[k] = D[k]; };
+  const bool = k => { if (typeof state[k] !== 'boolean') state[k] = D[k]; };
+  num('capital', 1, 1e12, true); pick('discount', [1, 0.6, 0.5, 0.38, 0.28, 0]);
+  bool('useSyn'); bool('excess'); bool('log'); bool('rbTrend');
+  num('rollYears', 1, 30, true); num('rndN', 10, 5000, true); num('rndMin', 0.5, 30); num('rndMax', 0.5, 30); num('seed', -1e9, 1e9, true);
+  num('mcN', 100, MC_MAX, true); num('mcYears', 1, 30, true); num('mcSeed', -1e9, 1e9, true); pick('mcBlock', [1, 20, 60, 120, 250]);
+  num('rbBand', 0, 50); num('rbCash', 0, 10);
+  pick('strategy', ['bh', 'trend', 'rebal']); pick('mode', ['period', 'rolling', 'random', 'mc']);
+  pick('signalPrice', ['raw', 'adjusted']); pick('metric', Object.keys(METRICS)); pick('mcMetric', ['cagr', 'mdd', 'total']);
+  pick('rbFreq', ['none', 'M', 'Q', 'H', 'Y']); pick('chartAsset', ORDER);
+  const okDate = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(v));
+  if (!okDate(state.start)) state.start = D.start;
+  if (state.end !== '' && !okDate(state.end)) state.end = D.end;
+  state.assets = new Set([...state.assets].filter(c => ORDER.includes(c)));
+  if (!state.assets.size) state.assets = new Set(ORDER);
+  const w = {};
+  for (const k of ['0050', '00631L', '00675L', 'CASH']) { const v = Number(state.rbWeights?.[k]); w[k] = Number.isFinite(v) ? Math.min(100, Math.max(0, v)) : 0; }
+  state.rbWeights = w;
+  for (const lev of [1, 2]) {
+    const c = state.trendCustom[lev] || {};
+    for (const k of Object.keys(c)) {
+      const f = PARAM_FIELDS.find(x => x[0] === k), v = Number(c[k]);
+      if (!f || !Number.isFinite(v) || typeof c[k] === 'boolean') { delete c[k]; continue; }
+      c[k] = Math.min(f[4], Math.max(f[3], ['maFast', 'maSlow', 'pyramidLevels'].includes(k) ? Math.round(v) : v));
+    }
+    state.trendCustom[lev] = c;
+  }
 }
 
 // ---------- 設定表單 ----------
@@ -319,7 +357,7 @@ const hasTrendEffect = cfg => cfg.trend && Object.keys(E.normWeights(cfg.weights
 function cfgLabel(cfg) {
   const w = E.normWeights(cfg.weights);
   const mix = Object.entries(w).map(([k, v]) => `${RB_NAMES[k]} ${Math.round(v * 100)}%`).join(' ＋ ');
-  return `${mix}${cfg.trend ? '（正2 搭配均線）' : ''} · ${$('rbRuleText').textContent.replace(/。$/, '')} · 曝險約 ${E.exposureOf(cfg.weights).toFixed(2)} 倍`;
+  return `${mix}${hasTrendEffect(cfg) ? '（正2 搭配均線）' : ''} · ${$('rbRuleText').textContent.replace(/。$/, '')} · 曝險約 ${E.exposureOf(cfg.weights).toFixed(2)} 倍`;
 }
 
 function renderRebalPeriod(cfg) {
