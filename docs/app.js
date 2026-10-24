@@ -1,9 +1,9 @@
 // 介面：讀設定 → 呼叫 engine.js 計算 → 畫結果
-import * as E from './engine.js?v=ce6cc9d598';
-import { LineChart, ScatterChart } from './plot.js?v=ce6cc9d598';
+import * as E from './engine.js?v=33d79c1766';
+import { LineChart, ScatterChart } from './plot.js?v=33d79c1766';
 
 // 版本號：tools/stamp_version.py 自動蓋上（日期 · 程式內容的 hash，跟 finance-app 一樣不手動編號）
-const BUILD_HASH = 'ce6cc9d598';
+const BUILD_HASH = '33d79c1766';
 const BUILD_DATE = '2026-10-24';
 
 const ORDER = ['TAIEX', '0050', '00631L', '00675L'];
@@ -403,6 +403,8 @@ function renderRebalPeriod(cfg) {
   const wN = E.normWeights(cfg.weights);
   const tooSmall = Object.entries(res.lotPrice).filter(([c, pl]) => state.capital * wN[c] < pl / 2);
   let html = trSkip ? `<div class="warn">00631L 均線策略在這段期間最早 ${trSkip} 才能開始，跟這個配置差太多，沒有列入比較。</div>` : '';
+  if (cfg.trend && !hasTrendEffect(cfg)) html += `<div class="warn">這個配置沒有正2（00631L、00675L），「搭配均線訊號」只管正2，開或關結果都一樣。</div>`;
+  else if (hasTrendEffect(cfg) && nSig === 0) html += `<div class="warn">這段期間正2 的均線沒有任何動作（沒有出場、接刀或轉回續抱），所以「搭配均線訊號」開或關結果一樣。拉長期間（例如包含 2008、2020、2022 年）就看得出差別。</div>`;
   if (tooSmall.length) html += `<div class="warn">整張交易（一張 1000 股）：投入金額 × 比例不到半張，買不到 ${tooSmall.map(([c, pl]) => `${c}（配置 ${money(state.capital * wN[c])}，一張 ${money(pl)}）`).join('、')}，那部分會一直是現金。請提高投入金額。</div>`;
   html += aligned ? `<div class="warn">00631L 均線策略要先累積均線，最早 ${aligned} 才能開始；為了在同一段期間比較，全部從那天開始。</div>`
     : res.shifted ? `<div class="warn">這個配置最早 ${res.shifted} 才有資料${cfg.trend ? '（正2 的均線要先累積）' : ''}，從那天開始。</div>` : '';
