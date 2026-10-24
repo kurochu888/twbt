@@ -69,26 +69,26 @@ def _run_path(ret: np.ndarray, sig_ret: np.ndarray, p: TrendParams, warm: int,
         if div[t] != 0:
             acct.cash += acct.shares * div[t]
         if a == RECOVER:
-            acct.buy_max(acct.cash, px[t], LOT); trades += 1
+            acct.buy_max(acct.cash, px[t] * LOT, LOT); trades += 1
         elif a == ADD:
-            acct.buy_max(cash_at_exit / p.pyramid_levels, px[t], LOT); trades += 1
+            acct.buy_max(cash_at_exit / p.pyramid_levels, px[t] * LOT, LOT); trades += 1
         elif a == EXIT:
-            acct.sell_all(px[t]); cash_at_exit = acct.cash; trades += 1
+            acct.sell_all(px[t] * LOT, LOT); cash_at_exit = acct.cash; trades += 1
         elif div[t] != 0 and status[t] == HOLD:
-            acct.buy_max(acct.cash, px[t], LOT)
-        eq[t - si] = acct.value(px[t])
-    eq[-1] = acct.final_value(px[-1])
+            acct.buy_max(acct.cash, px[t] * LOT, LOT)
+        eq[t - si] = acct.value(px[t] * LOT, LOT)
+    eq[-1] = acct.final_value(px[-1] * LOT, LOT)
     # 買進持有：同一天買最多張數、配息夠一張就再投入、最後一天賣出
     b = LotAccount(capital, cost, kind)
-    b.buy_max(b.cash, px[si], LOT)
+    b.buy_max(b.cash, px[si] * LOT, LOT)
     bh = np.empty(n - si)
-    bh[0] = b.value(px[si])
+    bh[0] = b.value(px[si] * LOT, LOT)
     for t in range(si + 1, n):
         if div[t] != 0:
             b.cash += b.shares * div[t]
-            b.buy_max(b.cash, px[t], LOT)
-        bh[t - si] = b.value(px[t])
-    bh[-1] = b.final_value(px[-1])
+            b.buy_max(b.cash, px[t] * LOT, LOT)
+        bh[t - si] = b.value(px[t] * LOT, LOT)
+    bh[-1] = b.final_value(px[-1] * LOT, LOT)
     return eq, bh, trades
 
 

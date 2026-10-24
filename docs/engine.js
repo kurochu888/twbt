@@ -93,7 +93,11 @@ export function lotSeries(data, code, opts) {
   for (let t = 1; t < n; t++) {
     if (!(Number.isNaN(r[t]) || Number.isNaN(s[t]) || Number.isNaN(px[t - 1])) && r[t] !== s[t]) div[t] = px[t - 1] * (r[t] - s[t]) / (1 + r[t]);
   }
-  const out = { px, lot, div };
+  // 每張金額：真實期間 = 實際成交價（到分）× 1000，四捨五入到 10 元（手續費卡在 .5 元時捨入方向才不會因為浮點誤差不同）
+  const lp = new Float64Array(n);
+  const realFrom = opts.useSynthetic === false || a.firstReal === null ? 0 : Math.max(a.firstReal, 0);
+  for (let t = 0; t < n; t++) { lp[t] = px[t] * lot[t]; if (t >= realFrom && a.firstReal !== null && !Number.isNaN(lp[t])) lp[t] = Math.floor(lp[t] / 10 + 0.5) * 10; }
+  const out = { px, lot, lp, div };
   if (lotCache.size >= 12) lotCache.delete(lotCache.keys().next().value);
   lotCache.set(key, out);
   return out;
@@ -109,24 +113,27 @@ export class LotAccount {
     while (n > 0 && n * lotPrice + this.cost.buy(n * lotPrice, this.kind) > budget) n--;   // 最低手續費 20 元時可能還不夠
     return n;
   }
-  buyLots(n, px, lot) {
+  // lp = 每張金額、lot = 每張股數（現在的股）；張數 = 股數 ÷ 每張股數，一定是整數
+  lots(lot) { return Math.round(this.shares / lot); }
+  buyLots(n, lp, lot) {
     if (n <= 0) return false;
-    const gross = n * px * lot;
+    const gross = n * lp;
     this.cash -= gross + this.cost.buy(gross, this.kind); this.shares += n * lot;
     return true;
   }
-  buyMax(budget, px, lot) { return this.buyLots(this.maxLots(budget, px * lot), px, lot); }
-  sellShares(shares, px) {
-    if (shares <= 0) return false;
-    const gross = shares * px;
-    this.cash += gross - this.cost.sell(gross, this.kind); this.shares -= shares;
+  buyMax(budget, lp, lot) { return this.buyLots(this.maxLots(budget, lp), lp, lot); }
+  sellLots(n, lp, lot) {
+    if (n <= 0) return false;
+    const gross = n * lp;
+    this.cash += gross - this.cost.sell(gross, this.kind); this.shares -= n * lot;
     return true;
   }
-  sellAll(px) { return this.sellShares(this.shares, px); }
-  value(px) { return this.cash + this.shares * px; }
-  finalValue(px) {                       // 期末全部賣出後的金額
-    if (this.shares <= 0) return this.cash;
-    const gross = this.shares * px;
+  sellAll(lp, lot) { const ok = this.sellLots(this.lots(lot), lp, lot); this.shares = 0; return ok; }
+  value(lp, lot) { return this.cash + this.lots(lot) * lp; }
+  finalValue(lp, lot) {                  // 期末全部賣出後的金額
+    const n = this.lots(lot);
+    if (n <= 0) return this.cash;
+    const gross = n * lp;
     return this.cash + gross - this.cost.sell(gross, this.kind);
   }
 }
@@ -141,20 +148,20 @@ function bhPath(data, code, si, ei, opts) {
     for (let i = si + 1; i <= ei; i++) eq[i - si] = eq[i - si - 1] * (1 + r[i]);
     return { eq, lots0: null };
   }
-  const { px, lot, div } = lotSeries(data, code, opts);
+  const { lp, lot, div } = lotSeries(data, code, opts);
   const acct = new LotAccount(capital, cost, a.kind);
-  acct.buyMax(acct.cash, px[si], lot[si]);
-  const lots0 = acct.shares / lot[si];
-  eq[0] = acct.value(px[si]);
+  acct.buyMax(acct.cash, lp[si], lot[si]);
+  const lots0 = acct.lots(lot[si]);
+  eq[0] = acct.value(lp[si], lot[si]);
   for (let t = si + 1; t <= ei; t++) {
     if (div[t] !== 0) {
       acct.cash += acct.shares * div[t];
-      if (!a.halt.has(t)) acct.buyMax(acct.cash, px[t], lot[t]);
+      if (!a.halt.has(t)) acct.buyMax(acct.cash, lp[t], lot[t]);
     }
-    eq[t - si] = acct.value(px[t]);
+    eq[t - si] = acct.value(lp[t], lot[t]);
   }
-  eq[eq.length - 1] = acct.finalValue(px[ei]);
-  return { eq, lots0, lotPrice: px[si] * lot[si] };
+  eq[eq.length - 1] = acct.finalValue(lp[ei], lot[ei]);
+  return { eq, lots0, lotPrice: lp[si] };
 }
 
 // ---------- 區間 ----------
@@ -483,29 +490,29 @@ function trendSim(data, code, prep, p, si, ei, opts, keepEvents) {
   const { capital = 1_000_000, cost = makeCost() } = opts;
   const kind = data.assets[code].kind, halt = data.assets[code].halt;
   const { i0, act, status, layers } = prep;
-  const { px: PX, lot: LOTS, div: DIV } = lotSeries(data, code, opts);
+  const { lp: LP, lot: LOTS, div: DIV } = lotSeries(data, code, opts);
   const acct = new LotAccount(capital, cost, kind);
   const j0 = si - i0, st0 = status[j0], k0 = layers[j0];
   let cashAtExit = capital;
-  if (st0 === STATUS.HOLD) acct.buyMax(acct.cash, PX[si], LOTS[si]);
-  else if (st0 === STATUS.WAIT && k0 > 0) acct.buyMax(cashAtExit * k0 / p.pyramidLevels, PX[si], LOTS[si]);
+  if (st0 === STATUS.HOLD) acct.buyMax(acct.cash, LP[si], LOTS[si]);
+  else if (st0 === STATUS.WAIT && k0 > 0) acct.buyMax(cashAtExit * k0 / p.pyramidLevels, LP[si], LOTS[si]);
   const eq = new Float64Array(ei - si + 1);
-  eq[0] = acct.value(PX[si]);
+  eq[0] = acct.value(LP[si], LOTS[si]);
   const events = [];
   let peak = eq[0], mdd = 0, inMarket = acct.shares > 0 ? 1 : 0;
   for (let t = si + 1; t <= ei; t++) {
-    const j = t - i0, a = act[j], px = PX[t], lot = LOTS[t];
+    const j = t - i0, a = act[j], lp = LP[t], lot = LOTS[t];
     if (DIV[t] !== 0) acct.cash += acct.shares * DIV[t];          // 配息發現金
-    if (a === ACT.RECOVER) acct.buyMax(acct.cash, px, lot);
-    else if (a === ACT.ADD) acct.buyMax(cashAtExit / p.pyramidLevels, px, lot);
-    else if (a === ACT.EXIT) { acct.sellAll(px); cashAtExit = acct.cash; }
-    else if (DIV[t] !== 0 && status[j] === STATUS.HOLD && !halt.has(t)) acct.buyMax(acct.cash, px, lot);   // 續抱中配息再投入
-    const v = acct.value(px);
-    if (a && keepEvents) events.push({ i: t, act: a, layer: layers[j], value: v, price: px * lot / LOT, lots: acct.shares / lot });
+    if (a === ACT.RECOVER) acct.buyMax(acct.cash, lp, lot);
+    else if (a === ACT.ADD) acct.buyMax(cashAtExit / p.pyramidLevels, lp, lot);
+    else if (a === ACT.EXIT) { acct.sellAll(lp, lot); cashAtExit = acct.cash; }
+    else if (DIV[t] !== 0 && status[j] === STATUS.HOLD && !halt.has(t)) acct.buyMax(acct.cash, lp, lot);   // 續抱中配息再投入
+    const v = acct.value(lp, lot);
+    if (a && keepEvents) events.push({ i: t, act: a, layer: layers[j], value: v, price: lp / LOT, lots: acct.lots(lot) });
     eq[t - si] = v;
     if (acct.shares > 0) inMarket++;
   }
-  eq[eq.length - 1] = acct.finalValue(PX[ei]);
+  eq[eq.length - 1] = acct.finalValue(LP[ei], LOTS[ei]);
   for (const v of eq) { if (v > peak) peak = v; const d = v / peak - 1; if (d < mdd) mdd = d; }
   return { eq, events, st0, k0, mdd, inMarket: inMarket / eq.length };
 }
@@ -617,19 +624,20 @@ function mcPath(src, idx, p, warm, kind, cost, capital) {
   for (let t = warm + 1; t < n; t++) {
     const a = act[t];
     if (div[t] !== 0) acct.cash += acct.shares * div[t];
-    if (a === ACT.RECOVER) { acct.buyMax(acct.cash, px[t], LOT); trades++; }
-    else if (a === ACT.ADD) { acct.buyMax(cashAtExit / p.pyramidLevels, px[t], LOT); trades++; }
-    else if (a === ACT.EXIT) { acct.sellAll(px[t]); cashAtExit = acct.cash; trades++; }
-    else if (div[t] !== 0 && status[t] === STATUS.HOLD) acct.buyMax(acct.cash, px[t], LOT);
-    v = t === n - 1 ? acct.finalValue(px[t]) : acct.value(px[t]);
+    const lp = px[t] * LOT;
+    if (a === ACT.RECOVER) { acct.buyMax(acct.cash, lp, LOT); trades++; }
+    else if (a === ACT.ADD) { acct.buyMax(cashAtExit / p.pyramidLevels, lp, LOT); trades++; }
+    else if (a === ACT.EXIT) { acct.sellAll(lp, LOT); cashAtExit = acct.cash; trades++; }
+    else if (div[t] !== 0 && status[t] === STATUS.HOLD) acct.buyMax(acct.cash, lp, LOT);
+    v = t === n - 1 ? acct.finalValue(lp, LOT) : acct.value(lp, LOT);
     if (v > peak) peak = v; else if (v / peak - 1 < mdd) mdd = v / peak - 1;
   }
   const b = new LotAccount(capital, cost, kind);
-  b.buyMax(b.cash, px[warm], LOT);
-  let bv = b.value(px[warm]), bpeak = bv, bmdd = 0;
+  b.buyMax(b.cash, px[warm] * LOT, LOT);
+  let bv = b.value(px[warm] * LOT, LOT), bpeak = bv, bmdd = 0;
   for (let t = warm + 1; t < n; t++) {
-    if (div[t] !== 0) { b.cash += b.shares * div[t]; b.buyMax(b.cash, px[t], LOT); }
-    bv = t === n - 1 ? b.finalValue(px[t]) : b.value(px[t]);
+    if (div[t] !== 0) { b.cash += b.shares * div[t]; b.buyMax(b.cash, px[t] * LOT, LOT); }
+    bv = t === n - 1 ? b.finalValue(px[t] * LOT, LOT) : b.value(px[t] * LOT, LOT);
     if (bv > bpeak) bpeak = bv; else if (bv / bpeak - 1 < bmdd) bmdd = bv / bpeak - 1;
   }
   const cg = x => (x > 0 ? x ** (1 / years) - 1 : -1);
@@ -722,12 +730,12 @@ function rebalCtx(data, cfg, opts, custom) {
   }
   const L = Object.fromEntries(codes.map(c => [c, lotSeries(data, c, opts)]));
   return { w, codes, R, preps, first,
-    PX: Object.fromEntries(codes.map(c => [c, L[c].px])), LOTS: Object.fromEntries(codes.map(c => [c, L[c].lot])),
+    LP: Object.fromEntries(codes.map(c => [c, L[c].lp])), LOTS: Object.fromEntries(codes.map(c => [c, L[c].lot])),
     DIV: Object.fromEntries(codes.map(c => [c, L[c].div])) };
 }
 
 function rebalSim(data, ctx, cfg, si, ei, opts, keepLog) {
-  const { w, codes, preps, PX, LOTS, DIV } = ctx;
+  const { w, codes, preps, LP, LOTS, DIV } = ctx;
   const keyAt = ctx.keyAt ?? (t => periodKey(data.days[t], cfg.freq));
   const cost = opts.cost ?? makeCost(), capital = opts.capital ?? 1_000_000;
   const cashG = 1 + (cfg.cashRate ?? 0), dtAt = ctx.dt ? (t => ctx.dt[t]) : (t => data.dt[t]);
@@ -745,7 +753,7 @@ function rebalSim(data, ctx, cfg, si, ei, opts, keepLog) {
     for (const c of codes) { tw[c] = w[c] * frac(c, t); s += tw[c]; }
     tw.CASH = 1 - s; return tw;
   };
-  const hold = c => acct[c].shares * PX[c][curT];
+  const hold = c => acct[c].lots(LOTS[c][curT]) * LP[c][curT];
   const total = () => { let v = cash; for (const c of codes) v += hold(c); return v; };
   // 暫停交易（分割）的日子不能買賣：定期再平衡先跳過那一檔，下次檢查再調（模擬路徑沒有暫停交易日）
   const halted = c => !ctx.dt && data.assets[c].halt.has(curT);
@@ -753,24 +761,22 @@ function rebalSim(data, ctx, cfg, si, ei, opts, keepLog) {
   const tradeTo = (tw, only, smallOk) => {
     const V = total(), sel = only ? [only] : codes.filter(c => smallOk || !halted(c));
     const want = {};
-    for (const c of sel) want[c] = tw[c] === 0 ? 0 : Math.floor(tw[c] * V / (PX[c][curT] * LOTS[c][curT]) + 0.5);   // 最接近目標的張數
+    for (const c of sel) want[c] = tw[c] === 0 ? 0 : Math.floor(tw[c] * V / LP[c][curT] + 0.5);   // 最接近目標的張數
     for (const c of sel) {                                    // 先賣
-      const a = acct[c], lot = LOTS[c][curT], have = Math.round(a.shares / lot);
+      const a = acct[c], lot = LOTS[c][curT], lp = LP[c][curT], have = a.lots(lot);
       if (have > want[c]) {
-        const g = (have - want[c]) * lot * PX[c][curT];
-        if (g < MIN_TRADE && !(smallOk || tw[c] === 0)) continue;
-        a.cash = 0; a.sellShares(want[c] === 0 ? a.shares : (have - want[c]) * lot, PX[c][curT]);
+        if ((have - want[c]) * lp < MIN_TRADE && !(smallOk || tw[c] === 0)) continue;
+        a.cash = 0; a.sellLots(have - want[c], lp, lot);
         cash += a.cash; trades++;
       }
     }
     for (const c of sel) {                                    // 再用現金買
-      const a = acct[c], lot = LOTS[c][curT], have = Math.round(a.shares / lot);
+      const a = acct[c], lot = LOTS[c][curT], lp = LP[c][curT], have = a.lots(lot);
       if (have < want[c]) {
-        const pl = PX[c][curT] * lot;
         a.cash = cash;
-        const n = Math.min(want[c] - have, a.maxLots(cash, pl));
-        if (n <= 0 || (n * pl < MIN_TRADE && !smallOk)) continue;
-        a.buyLots(n, PX[c][curT], lot);
+        const n = Math.min(want[c] - have, a.maxLots(cash, lp));
+        if (n <= 0 || (n * lp < MIN_TRADE && !smallOk)) continue;
+        a.buyLots(n, lp, lot);
         cash = a.cash; trades++;
       }
     }
@@ -814,7 +820,7 @@ export function rebalPeriod(data, cfg, startIso, endIso, opts, custom) {
   const dayIdx = data.days.subarray(si, ei + 1);
   const main = rebalSim(data, ctx, cfg, si, ei, opts, true);
   const flat = rebalSim(data, ctx, { ...cfg, freq: 'none', band: 0 }, si, ei, opts, false);
-  const lotPrice = Object.fromEntries(ctx.codes.map(c => [c, ctx.PX[c][si] * ctx.LOTS[c][si]]));
+  const lotPrice = Object.fromEntries(ctx.codes.map(c => [c, ctx.LP[c][si]]));
   return { si, ei, dayIdx, shifted, main, flat, lotPrice, exposure: exposureOf(cfg.weights),
     stats: summarize(main.eq, dayIdx), flatStats: summarize(flat.eq, dayIdx) };
 }
@@ -855,7 +861,7 @@ export function rebalMcPath(data, cfg, opts, custom, idx, warm, yearsIn, srcIn) 
   const need = new Set([...codes, '0050', '00631L']);           // 對照組要用到 0050、00631L
   const src = srcIn ?? Object.fromEntries([...need].map(c => [c, { r: returnsFor(data, c, opts), s: signalReturnsFor(data, c, opts), q: priceReturnsFor(data, c, opts) }]));
   const n = idx.length + 1;
-  const R = {}, preps = {}, kind = {}, PX = {}, LOTS = {}, DIV = {};
+  const R = {}, preps = {}, kind = {}, LP = {}, LOTS = {}, DIV = {};
   const dtp = new Float64Array(n);
   let years = 0;
   for (let j = 1; j < n; j++) { dtp[j] = data.dt[idx[j - 1]]; if (j > warm) years += dtp[j]; }   // 實際經過的日曆時間
@@ -866,14 +872,14 @@ export function rebalMcPath(data, cfg, opts, custom, idx, warm, yearsIn, srcIn) 
     for (let j = 1; j < n; j++) { r[j] = src[c].r[idx[j - 1]]; q[j - 1] = src[c].q[idx[j - 1]]; spx[j] = spx[j - 1] * (1 + src[c].s[idx[j - 1]]); }
     R[c] = r; kind[c] = data.assets[c].kind;
     const pp = pathPrices(r.subarray(1), q, data.assets[c].pxLast ?? 1);
-    PX[c] = pp.px; DIV[c] = pp.div; LOTS[c] = new Float64Array(n).fill(LOT);
+    LP[c] = pp.px.map(x => x * LOT); DIV[c] = pp.div; LOTS[c] = new Float64Array(n).fill(LOT);
     if (LEVERAGED.has(c)) {
       const p = trendParamsFor(c, custom), sig = signals(spx, p);
       preps[c] = { prep: { i0: 0, ...sig }, levels: p.pyramidLevels, p };
     }
   }
   const fd = FREQ_DAYS[cfg.freq];
-  const mk = (cf, cs) => ({ w: normWeights(cf.weights), codes: cs, R, kind, dt: dtp, PX, LOTS, DIV,
+  const mk = (cf, cs) => ({ w: normWeights(cf.weights), codes: cs, R, kind, dt: dtp, LP, LOTS, DIV,
     preps: cf.trend ? Object.fromEntries(cs.filter(c => preps[c]).map(c => [c, preps[c]])) : {},
     keyAt: t => (fd ? Math.floor((t - warm) / fd) : null) });
   const ei = n - 1, capital = opts.capital ?? 1_000_000;

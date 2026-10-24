@@ -106,7 +106,7 @@ class RebalBacktest:
         codes = [c for c in w if c != "CASH"]
         cost, capital = self.bh.cost, self.bh.capital
         acct = {c: LotAccount(0.0, cost, KIND[c]) for c in codes}   # 每一檔的股數（現金統一放 cash）
-        PX = {c: self.lots[c]["px"] for c in codes}
+        LP = {c: self.lots[c]["lp"] for c in codes}
         LOT = {c: self.lots[c]["lot"] for c in codes}
         DIV = {c: self.lots[c]["div"] for c in codes}
         cash = capital
@@ -123,7 +123,7 @@ class RebalBacktest:
             return tw
 
         def hold(c):
-            return acct[c].shares * PX[c][cur_t]
+            return acct[c].lots(LOT[c][cur_t]) * LP[c][cur_t]
 
         def total():
             return cash + sum(hold(c) for c in codes)
@@ -135,29 +135,26 @@ class RebalBacktest:
             sel = [only] if only else [c for c in codes if small_ok or not self.halt[c][cur_t]]
             want = {}
             for c in sel:
-                pl = PX[c][cur_t] * LOT[c][cur_t]
-                want[c] = 0 if tw[c] == 0 else int(math.floor(tw[c] * V / pl + 0.5))   # 最接近目標的張數
+                want[c] = 0 if tw[c] == 0 else int(math.floor(tw[c] * V / LP[c][cur_t] + 0.5))   # 最接近目標的張數
             for c in sel:                                   # 先賣
-                a, lot = acct[c], LOT[c][cur_t]
-                have = int(round(a.shares / lot))
+                a, lot, lp = acct[c], LOT[c][cur_t], LP[c][cur_t]
+                have = a.lots(lot)
                 if have > want[c]:
-                    g = (have - want[c]) * lot * PX[c][cur_t]
-                    if g < MIN_TRADE and not (small_ok or tw[c] == 0):
+                    if (have - want[c]) * lp < MIN_TRADE and not (small_ok or tw[c] == 0):
                         continue
                     a.cash = 0.0
-                    a.sell_shares(a.shares if want[c] == 0 else (have - want[c]) * lot, PX[c][cur_t])
+                    a.sell_lots(have - want[c], lp, lot)
                     cash += a.cash
                     trades += 1
             for c in sel:                                   # 再用現金買
-                a, lot = acct[c], LOT[c][cur_t]
-                have = int(round(a.shares / lot))
+                a, lot, lp = acct[c], LOT[c][cur_t], LP[c][cur_t]
+                have = a.lots(lot)
                 if have < want[c]:
-                    pl = PX[c][cur_t] * lot
                     a.cash = cash
-                    n = min(want[c] - have, a.max_lots(cash, pl))
-                    if n <= 0 or (n * pl < MIN_TRADE and not small_ok):
+                    n = min(want[c] - have, a.max_lots(cash, lp))
+                    if n <= 0 or (n * lp < MIN_TRADE and not small_ok):
                         continue
-                    a.buy_lots(n, PX[c][cur_t], lot)
+                    a.buy_lots(n, lp, lot)
                     cash = a.cash
                     trades += 1
 

@@ -32,7 +32,7 @@ class BuyHold:
         self.use_synthetic = use_synthetic
         self.price_ret, traded = load_signal_inputs(data_dir, self.rets, self.syn, tw50_excess)
         self.halt = {c: ~traded[c].to_numpy() for c in self.rets.columns}
-        self.lots = load_lot_inputs(data_dir, self.rets, self.price_ret)
+        self.lots = load_lot_inputs(data_dir, self.rets, self.price_ret, self.syn)
 
     # ---------- 單一區間 ----------
     def _bounds(self, start, end) -> tuple[pd.Timestamp, pd.Timestamp]:
@@ -62,19 +62,19 @@ class BuyHold:
             r = self.rets[asset].to_numpy()[si + 1:ei + 1]
             return self.capital * np.concatenate([[1.0], np.cumprod(1 + r)]), None
         L, halt = self.lots[asset], self.halt[asset]
-        px, lot, div = L["px"], L["lot"], L["div"]
+        lp, lot, div = L["lp"], L["lot"], L["div"]
         acct = LotAccount(self.capital, self.cost, KIND[asset])
-        acct.buy_max(acct.cash, px[si], lot[si])
-        lots0 = acct.shares / lot[si]
+        acct.buy_max(acct.cash, lp[si], lot[si])
+        lots0 = acct.lots(lot[si])
         eq = np.empty(ei - si + 1)
-        eq[0] = acct.value(px[si])
+        eq[0] = acct.value(lp[si], lot[si])
         for t in range(si + 1, ei + 1):
             if div[t] != 0:
                 acct.cash += acct.shares * div[t]           # 配息發現金
                 if not halt[t]:
-                    acct.buy_max(acct.cash, px[t], lot[t])  # 夠買一張就再投入
-            eq[t - si] = acct.value(px[t])
-        eq[-1] = acct.final_value(px[ei])
+                    acct.buy_max(acct.cash, lp[t], lot[t])  # 夠買一張就再投入
+            eq[t - si] = acct.value(lp[t], lot[t])
+        eq[-1] = acct.final_value(lp[ei], lot[ei])
         return eq, lots0
 
     def period(self, start, end, assets=None) -> tuple[pd.DataFrame, pd.DataFrame]:

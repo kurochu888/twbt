@@ -3,6 +3,8 @@
 每股價格（px）：以最新一天的實際收盤為錨，往回用「不含配息、只還原分割」的價格報酬推回去，
     單位是「現在的一股」。分割前的一張 = 1000 股 × 分割倍數（例如 0050 2025 年一拆四前，一張 = 4000 個現在的股），
     所以 px × 每張股數 = 當時一張的實際金額（真實期間跟證交所收盤價一致）。上市前（模擬段）照同樣方法往回推。
+每張金額（lp）：真實期間 = 實際收盤（到分）× 1000，四捨五入到 10 元（實際成交價只有兩位小數），
+    這樣手續費剛好卡在 .5 元時不會因為浮點誤差捨入方向不同；模擬段 = px × 每張股數。
 配息（div）：除息那天每股發多少現金 = 前一天價格 × (總報酬 − 價格報酬) ÷ (1 + 總報酬)
     （總報酬 = 收盤 ÷ 除息參考價、價格報酬 = 收盤 ÷ 前一天收盤，兩式相減剛好是配息金額）。
     0050 上市前的模擬段每天都有一點股息（年化約 3.5%）。正2 不配息。
@@ -23,10 +25,11 @@ def rnd(x: float) -> float:
     return math.floor(x + 0.5)
 
 
-def load_lot_inputs(data_dir: str | Path, rets: pd.DataFrame, price_ret: pd.DataFrame) -> dict:
-    """回傳 {代號: {"px": ndarray, "lot": ndarray, "div": ndarray}}（大盤不能交易，不算）。
+def load_lot_inputs(data_dir: str | Path, rets: pd.DataFrame, price_ret: pd.DataFrame,
+                    syn: pd.DataFrame | None = None) -> dict:
+    """回傳 {代號: {"px", "lot", "lp", "div"}}（大盤不能交易，不算）。
 
-    rets：每日總報酬；price_ret：不含配息的價格報酬（load_signal_inputs 的第一個結果）。
+    rets：每日總報酬；price_ret：不含配息的價格報酬（load_signal_inputs 的第一個結果）；syn：是否模擬（決定哪段是真實價格）。
     """
     from ..data.adjust import load_splits
     d = Path(data_dir)
@@ -55,11 +58,19 @@ def load_lot_inputs(data_dir: str | Path, rets: pd.DataFrame, price_ret: pd.Data
             rd = pd.Timestamp(x["resume_date"])
             if rd <= idx[-1]:                 # 資料範圍之後的分割不算
                 lot[idx < rd] *= float(x["ratio"])
+        lp = px * lot
+        first_real = 0
+        if syn is not None:
+            real_days = idx[(syn[code] == 0).to_numpy() & ~np.isnan(r)]
+            first_real = idx.get_loc(real_days[0]) - 1 if len(real_days) else n
+        for t in range(max(first_real, 0), n):
+            if not np.isnan(lp[t]):
+                lp[t] = math.floor(lp[t] / 10 + 0.5) * 10          # 真實期間：實際成交價 × 1000
         div = np.zeros(n)
         for t in range(1, n):
             if not (np.isnan(r[t]) or np.isnan(s[t]) or np.isnan(px[t - 1])) and r[t] != s[t]:
                 div[t] = px[t - 1] * (r[t] - s[t]) / (1 + r[t])
-        out[code] = {"px": px, "lot": lot, "div": div}
+        out[code] = {"px": px, "lot": lot, "lp": lp, "div": div}
     return out
 
 
@@ -80,34 +91,41 @@ class LotAccount:
             n -= 1                                     # 最低手續費 20 元時可能還不夠
         return n
 
-    def buy_lots(self, n: int, px: float, lot: float) -> bool:
+    # lp = 每張金額、lot = 每張股數（現在的股）；張數 = 股數 ÷ 每張股數，一定是整數
+    def lots(self, lot: float) -> int:
+        return int(round(self.shares / lot))
+
+    def buy_lots(self, n: int, lp: float, lot: float) -> bool:
         if n <= 0:
             return False
-        gross = n * px * lot
+        gross = n * lp
         self.cash -= gross + self.cost.buy_cost(gross, self.kind)
         self.shares += n * lot
         return True
 
-    def buy_max(self, budget: float, px: float, lot: float) -> bool:
-        return self.buy_lots(self.max_lots(budget, px * lot), px, lot)
+    def buy_max(self, budget: float, lp: float, lot: float) -> bool:
+        return self.buy_lots(self.max_lots(budget, lp), lp, lot)
 
-    def sell_shares(self, shares: float, px: float) -> bool:
-        if shares <= 0:
+    def sell_lots(self, n: int, lp: float, lot: float) -> bool:
+        if n <= 0:
             return False
-        gross = shares * px
+        gross = n * lp
         self.cash += gross - self.cost.sell_cost(gross, self.kind)
-        self.shares -= shares
+        self.shares -= n * lot
         return True
 
-    def sell_all(self, px: float) -> bool:
-        return self.sell_shares(self.shares, px)
+    def sell_all(self, lp: float, lot: float) -> bool:
+        ok = self.sell_lots(self.lots(lot), lp, lot)
+        self.shares = 0.0
+        return ok
 
-    def value(self, px: float) -> float:
-        return self.cash + self.shares * px
+    def value(self, lp: float, lot: float) -> float:
+        return self.cash + self.lots(lot) * lp
 
-    def final_value(self, px: float) -> float:
+    def final_value(self, lp: float, lot: float) -> float:
         """期末全部賣出後的金額（扣手續費、證交稅）。"""
-        if self.shares <= 0:
+        n = self.lots(lot)
+        if n <= 0:
             return self.cash
-        gross = self.shares * px
+        gross = n * lp
         return self.cash + gross - self.cost.sell_cost(gross, self.kind)

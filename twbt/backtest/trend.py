@@ -185,39 +185,39 @@ class TrendBacktest:
         o = g["i0"]
         act, status, layers = g["act"], g["status"], g["layers"]
         L, halt = self.bh.lots[asset], self.bh.halt[asset]
-        PX, LOT, DIV = L["px"], L["lot"], L["div"]
+        LP, LOT, DIV = L["lp"], L["lot"], L["div"]
         acct = LotAccount(self.bh.capital, self.bh.cost, KIND[asset])
         j0 = si - o
         st0, k0 = int(status[j0]), int(layers[j0])
         cash_at_exit = self.bh.capital
         if st0 == HOLD:
-            acct.buy_max(acct.cash, PX[si], LOT[si])
+            acct.buy_max(acct.cash, LP[si], LOT[si])
         elif st0 == WAIT and k0 > 0:
-            acct.buy_max(cash_at_exit * k0 / p.pyramid_levels, PX[si], LOT[si])
+            acct.buy_max(cash_at_exit * k0 / p.pyramid_levels, LP[si], LOT[si])
         eq = np.empty(ei - si + 1)
-        eq[0] = acct.value(PX[si])
+        eq[0] = acct.value(LP[si], LOT[si])
         events = []
         for t in range(si + 1, ei + 1):
             j = t - o
-            a, px, lot = act[j], PX[t], LOT[t]
+            a, lp, lot = act[j], LP[t], LOT[t]
             if DIV[t] != 0:
                 acct.cash += acct.shares * DIV[t]           # 配息發現金
             if a == RECOVER:
-                acct.buy_max(acct.cash, px, lot)
+                acct.buy_max(acct.cash, lp, lot)
             elif a == ADD:
-                acct.buy_max(cash_at_exit / p.pyramid_levels, px, lot)
+                acct.buy_max(cash_at_exit / p.pyramid_levels, lp, lot)
             elif a == EXIT:
-                acct.sell_all(px)
+                acct.sell_all(lp, lot)
                 cash_at_exit = acct.cash
             elif DIV[t] != 0 and status[j] == HOLD and not halt[t]:
-                acct.buy_max(acct.cash, px, lot)            # 續抱中：配息夠買一張就再投入
+                acct.buy_max(acct.cash, lp, lot)            # 續抱中：配息夠買一張就再投入
             if a and keep_events:
                 events.append({"日期": self.rets.index[t].date(), "動作": ACTION_NAME[int(a)]
                                + (f" 第 {int(layers[j])} 層" if a == ADD else ""),
-                               "價格": px * lot / 1000, "持有張數": acct.shares / lot, "淨值": acct.value(px)})
-            eq[t - si] = acct.value(px)
+                               "價格": lp / 1000, "持有張數": acct.lots(lot), "淨值": acct.value(lp, lot)})
+            eq[t - si] = acct.value(lp, lot)
         # 期末賣出（扣成本），跟買進持有一樣
-        eq[-1] = acct.final_value(PX[ei])
+        eq[-1] = acct.final_value(LP[ei], LOT[ei])
         ev = pd.DataFrame(events, columns=["日期", "動作", "價格", "持有張數", "淨值"]) if keep_events else None
         return eq, ev, st0, k0
 
