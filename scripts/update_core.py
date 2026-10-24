@@ -136,6 +136,8 @@ def build_long(store: PriceStore, out_dir: Path, real: dict) -> None:
         lines.append("  " + report(code, r["ret"], s))
 
     import json
+    # 取 12 位有效數字：不同電腦（GitHub 的機器 vs 本機）浮點運算最後一兩位可能不同，不取的話每次重算都會有無意義的變動
+    params = {k: (float(f"{v:.12g}") if isinstance(v, float) else v) for k, v in params.items()}
     (long_dir / "params.json").write_text(json.dumps(params, indent=2), encoding="utf-8")
     text = "\n".join(lines)
     (long_dir / "calibration.txt").write_text(text + "\n", encoding="utf-8")
