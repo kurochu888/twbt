@@ -268,8 +268,8 @@ function sumText() {
 function ruleText() {
   const f = { none: '', M: '每月', Q: '每季', H: '每半年', Y: '每年' }[state.rbFreq], b = state.rbBand;
   $('rbRuleText').textContent = !f && !(b > 0) ? '不定期、不設門檻 = 買進後放著不調（對照組）。'
-    : !f ? `每天檢查，任一部位比例偏離目標超過 ${b} 點就調回。`
-    : !(b > 0) ? `${f}第一個交易日都調回目標比例。` : `${f}第一個交易日檢查，偏離超過 ${b} 點才調回。`;
+    : !f ? `每天檢查，任一部位占總資產的比例跟目標差超過 ${b}%（例如目標 50%，漲到 ${50 + b}% 以上或跌到 ${50 - b}% 以下）就調回。`
+    : !(b > 0) ? `${f}第一個交易日都調回目標比例。` : `${f}第一個交易日檢查，任一部位占總資產的比例跟目標差超過 ${b}%（例如目標 50%，變成 ${50 + b}% 以上或 ${50 - b}% 以下）才調回。`;
 }
 function rbCfg() {
   const w = Object.fromEntries(Object.entries(state.rbWeights).map(([k, v]) => [k, (v || 0) / 100]));
