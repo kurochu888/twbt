@@ -395,7 +395,11 @@ function renderRebalPeriod(cfg) {
   items.sort((a, b) => RB_ITEMS.findIndex(x => x[0] === a.k) - RB_ITEMS.findIndex(x => x[0] === b.k));
 
   const nReb = res.main.log.filter(l => l.what === '再平衡').length, nSig = res.main.log.length - nReb;
+  // 整張交易：配置金額不到半張的標的，四捨五入到 0 張，永遠買不到
+  const wN = E.normWeights(cfg.weights);
+  const tooSmall = Object.entries(res.lotPrice).filter(([c, pl]) => state.capital * wN[c] < pl / 2);
   let html = trSkip ? `<div class="warn">00631L 均線策略在這段期間最早 ${trSkip} 才能開始，跟這個配置差太多，沒有列入比較。</div>` : '';
+  if (tooSmall.length) html += `<div class="warn">整張交易（一張 1000 股）：投入金額 × 比例不到半張，買不到 ${tooSmall.map(([c, pl]) => `${c}（配置 ${money(state.capital * wN[c])}，一張 ${money(pl)}）`).join('、')}，那部分會一直是現金。請提高投入金額。</div>`;
   html += aligned ? `<div class="warn">00631L 均線策略要先累積均線，最早 ${aligned} 才能開始；為了在同一段期間比較，全部從那天開始。</div>`
     : res.shifted ? `<div class="warn">這個配置最早 ${res.shifted} 才有資料${cfg.trend ? '（正2 的均線要先累積）' : ''}，從那天開始。</div>` : '';
   html += `<section class="card"><h3>${esc(cfgLabel(cfg))}</h3>
@@ -739,6 +743,8 @@ function renderTrendPeriod(res) {
   const R = res.results;
   const shifted = R.filter(r => r.shiftedFrom);
   if (shifted.length) html += `<div class="warn">均線要先累積 ${Math.max(...shifted.map(r => Math.max(r.params.maFast, r.params.maSlow)))} 個交易日才算得出來，之前策略只能觀望，跟買進持有比不公平。所以這幾檔改從均線算得出來的那天開始（策略和買進持有同一天）：${shifted.map(r => `${SHORT[r.code]} ${r.shiftedFrom}`).join('、')}</div>`;
+  const poor = R.filter(r => r.bh.lots0 === 0);
+  if (poor.length) html += `<div class="warn">整張交易（一張 1000 股）：投入金額買不起一張 ${poor.map(r => `${SHORT[r.code]}（${money(r.bh.lotPrice)}）`).join('、')}，策略和買進持有都只能放現金，報酬是 0。請提高投入金額。</div>`;
   if (!R.some(r => r.code === state.chartAsset)) state.chartAsset = R[0].code;
 
   html += `<div class="cards trend-cards">${R.map(r => {

@@ -814,7 +814,8 @@ export function rebalPeriod(data, cfg, startIso, endIso, opts, custom) {
   const dayIdx = data.days.subarray(si, ei + 1);
   const main = rebalSim(data, ctx, cfg, si, ei, opts, true);
   const flat = rebalSim(data, ctx, { ...cfg, freq: 'none', band: 0 }, si, ei, opts, false);
-  return { si, ei, dayIdx, shifted, main, flat, exposure: exposureOf(cfg.weights),
+  const lotPrice = Object.fromEntries(ctx.codes.map(c => [c, ctx.PX[c][si] * ctx.LOTS[c][si]]));
+  return { si, ei, dayIdx, shifted, main, flat, lotPrice, exposure: exposureOf(cfg.weights),
     stats: summarize(main.eq, dayIdx), flatStats: summarize(flat.eq, dayIdx) };
 }
 
