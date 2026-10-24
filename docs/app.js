@@ -1,9 +1,9 @@
 // 介面：讀設定 → 呼叫 engine.js 計算 → 畫結果
-import * as E from './engine.js?v=33d79c1766';
-import { LineChart, ScatterChart } from './plot.js?v=33d79c1766';
+import * as E from './engine.js?v=c401bac538';
+import { LineChart, ScatterChart } from './plot.js?v=c401bac538';
 
 // 版本號：tools/stamp_version.py 自動蓋上（日期 · 程式內容的 hash，跟 finance-app 一樣不手動編號）
-const BUILD_HASH = '33d79c1766';
+const BUILD_HASH = 'c401bac538';
 const BUILD_DATE = '2026-10-24';
 
 const ORDER = ['TAIEX', '0050', '00631L', '00675L'];
@@ -357,6 +357,17 @@ const RB_ITEMS = [
   ['main', '再平衡策略', '--text'], ['noTr', '同配置不搭配均線', '--c-00675L'], ['flat', '同配置不再平衡', '--muted'], ['bh50', '0050 買進持有', '--c-0050'],
   ['bh631', '00631L 買進持有', '--c-alt'], ['tr631', '00631L 均線策略', '--c-00631L'],
 ];
+// 列名跟著設定：前幾列是「你的設定」和只改一個條件的對照，後三列是固定對照（不受這張卡的設定影響）
+function rbLabel(k) {
+  let tr = false; try { tr = hasTrendEffect(rbCfg()); } catch (_) { /* 比例全是 0 */ }
+  return {
+    main: tr ? '你的設定（再平衡＋均線）' : '你的設定（再平衡）',
+    noTr: '同設定、不搭配均線',
+    flat: tr ? '同配置、不再平衡（有均線）' : '同配置、不再平衡',
+  }[k] ?? RB_ITEMS.find(x => x[0] === k)[1];
+}
+const FIXED = new Set(['bh50', 'bh631', 'tr631']);
+const groupRow = (cols, prev, k) => (FIXED.has(k) && !FIXED.has(prev)) ? `<tr class="grp"><td colspan="${cols}">固定對照（不受上面的設定影響）</td></tr>` : '';
 const hasTrendEffect = cfg => cfg.trend && Object.keys(E.normWeights(cfg.weights)).some(k => k === '00631L' || k === '00675L');
 function cfgLabel(cfg) {
   const w = E.normWeights(cfg.weights);
@@ -395,7 +406,7 @@ function renderRebalPeriod(cfg) {
   for (const r of bh.results || []) items.push({ k: r.code === '0050' ? 'bh50' : 'bh631', eq: r.equity, dayIdx: r.dayIdx });
   const tr = trSkip ? {} : E.trendPeriod(DATA, ['00631L'], s0, s1, opts(), state.trendCustom);
   if (tr.results?.[0]) items.push({ k: 'tr631', eq: tr.results[0].equity, dayIdx: tr.results[0].dayIdx, note: tr.results[0].shiftedFrom });
-  for (const it of items) { const m = RB_ITEMS.find(x => x[0] === it.k); it.name = m[1]; it.color = css(m[2]); it.st = E.summarize(it.eq, it.dayIdx); }
+  for (const it of items) { const m = RB_ITEMS.find(x => x[0] === it.k); it.name = rbLabel(it.k); it.color = css(m[2]); it.st = E.summarize(it.eq, it.dayIdx); }
   items.sort((a, b) => RB_ITEMS.findIndex(x => x[0] === a.k) - RB_ITEMS.findIndex(x => x[0] === b.k));
 
   const nReb = res.main.log.filter(l => l.what === '再平衡').length, nSig = res.main.log.length - nReb;
@@ -411,10 +422,15 @@ function renderRebalPeriod(cfg) {
   html += `<section class="card"><h3>${esc(cfgLabel(cfg))}</h3>
     <p class="hint">${s0} ～ ${s1} · 再平衡 ${nReb} 次${cfg.trend ? ` · 均線訊號 ${nSig} 次` : ''} · 交易 ${res.main.trades} 筆 · 期末 ${moneyShort(res.stats.final)}</p>
     <div class="tbl-wrap"><table class="cmp-tbl"><thead><tr><th></th><th>年化</th><th class="tot">總報酬</th><th>最大回撤</th><th>報酬÷回撤</th></tr></thead><tbody>
-    ${items.map(it => `<tr class="${it.k === 'main' ? 'main' : ''}"><td><span class="dot" style="background:${it.color}"></span>${it.name}${it.note ? `<br><small style="color:var(--muted)">從 ${it.note} 起</small>` : ''}</td>
+    ${items.map((it, i) => groupRow(5, items[i - 1]?.k, it.k) + `<tr class="${it.k === 'main' ? 'main' : ''}"><td><span class="dot" style="background:${it.color}"></span>${it.name}${it.note ? `<br><small style="color:var(--muted)">從 ${it.note} 起</small>` : ''}</td>
       <td class="n ${cls(it.st.cagr)}">${pct(it.st.cagr, 1, true)}</td><td class="n tot">${totalShort(it.st.total)}</td>
       <td class="n neg">${pct(it.st.mdd)}</td><td class="n">${num2(it.st.calmar)}</td></tr>`).join('')}
-    </tbody></table></div></section>`;
+    </tbody></table></div>${(() => {
+      const a = items.find(x => x.k === 'main'), b = items.find(x => x.k === 'noTr');
+      if (!a || !b) return '';
+      const d = (a.st.cagr - b.st.cagr) * 100, m = (a.st.mdd - b.st.mdd) * 100;
+      return `<p class="hint"><b>均線的效果</b>（你的設定 vs 同設定、不搭配均線）：年化 ${d >= 0 ? '多' : '少'} ${Math.abs(d).toFixed(1)} 個百分點，最大回撤${m >= 0 ? '少' : '多'} ${Math.abs(m).toFixed(1)} 個百分點。</p>`;
+    })()}</section>`;
   html += `<section class="card"><div class="chart-head"><h3>資產成長</h3>
       <div class="seg" id="scaleSeg"><button type="button" data-log="1" aria-pressed="${state.log}">對數</button><button type="button" data-log="0" aria-pressed="${!state.log}">一般</button></div></div>
     <div class="chart-box" id="cGrowth"></div>
@@ -446,17 +462,17 @@ function rebalCompareTable(sets, years) {
   // sets: [{k, cagr:[], mdd:[]}]
   const q = (a, p) => E.quantile([...a].sort((x, y) => x - y), p);
   return `<div class="tbl-wrap"><table class="cmp-tbl"><thead><tr><th></th><th>年化中位數</th><th>年化 5%</th><th>虧損機率</th><th>回撤中位數</th><th>回撤 5%</th></tr></thead><tbody>
-    ${sets.map(it => { const m = RB_ITEMS.find(x => x[0] === it.k); return `<tr class="${it.k === 'main' ? 'main' : ''}"><td><span class="dot" style="background:${css(m[2])}"></span>${m[1]}</td>
+    ${sets.map((it, i) => { const m = RB_ITEMS.find(x => x[0] === it.k); return groupRow(6, sets[i - 1]?.k, it.k) + `<tr class="${it.k === 'main' ? 'main' : ''}"><td><span class="dot" style="background:${css(m[2])}"></span>${rbLabel(it.k)}</td>
       <td class="n ${cls(q(it.cagr, .5))}">${pct(q(it.cagr, .5), 1, true)}</td><td class="n ${cls(q(it.cagr, .05))}">${pct(q(it.cagr, .05), 1, true)}</td>
       <td class="n">${pct(it.cagr.filter(x => x < 0).length / it.cagr.length, 0)}</td>
       <td class="n neg">${pct(q(it.mdd, .5), 0)}</td><td class="n neg">${pct(q(it.mdd, .05), 0)}</td></tr>`; }).join('')}
     </tbody></table></div>`;
 }
 function winLine(rows, keys) {
-  const name = k => RB_ITEMS.find(x => x[0] === k)[1];
+  const name = k => rbLabel(k);
   const have = keys.filter(k => rows.some(r => r[k + 'Cagr'] !== undefined && r[k + 'Cagr'] !== null));
   const f = (k, field) => { const g = rows.filter(r => r[k + 'Cagr'] != null); return g.filter(r => field === 'c' ? r.cagr > r[k + 'Cagr'] : r.mdd > r[k + 'Mdd']).length / g.length; };
-  return `<p class="hint">策略年化贏過：${have.map(k => `${name(k)} <b>${pct(f(k, 'c'), 0)}</b>`).join('、')}<br>最大回撤比較小：${have.map(k => `${name(k)} <b>${pct(f(k, 'm'), 0)}</b>`).join('、')}</p>`;
+  return `<p class="hint">你的設定年化贏過：${have.map(k => `${name(k)} <b>${pct(f(k, 'c'), 0)}</b>`).join('、')}<br>最大回撤比較小：${have.map(k => `${name(k)} <b>${pct(f(k, 'm'), 0)}</b>`).join('、')}</p>`;
 }
 
 function renderRebalMulti(cfg, wins, title) {
@@ -483,7 +499,7 @@ function renderRebalMulti(cfg, wins, title) {
   const dist = sets.map(st => {
     const arr = [...st[m]].sort((x, y) => x - y), q = p => E.quantile(arr, p);
     const meta = RB_ITEMS.find(x => x[0] === st.k);
-    return { label: meta[1], color: css(meta[2]), s: { min: arr[0], max: arr[arr.length - 1], p5: q(.05), p25: q(.25), p50: q(.5), p75: q(.75), p95: q(.95) } };
+    return { label: rbLabel(st.k), color: css(meta[2]), s: { min: arr[0], max: arr[arr.length - 1], p5: q(.05), p25: q(.25), p50: q(.5), p75: q(.75), p95: q(.95) } };
   });
   $('results').innerHTML = `<section class="card"><h3>${esc(title)}</h3><p class="hint">${esc(cfgLabel(cfg))} · 共 ${rows.length} 段（對照組只算同一段期間有資料的）</p>
       ${winLine(rows, ['noTr', 'flat', 'bh50', 'bh631', 'tr631'])}
@@ -1004,10 +1020,10 @@ function renderRbMC(m) {
   const keys = RB_MC_KEYS.filter(([, c]) => rows[0]?.[c] !== undefined);   // 沒搭配均線時沒有「不搭配均線」那一組
   const sets = keys.map(([k, c, d]) => ({ k, cagr: rows.map(r => r[c]), mdd: rows.map(r => r[d]) }));
   const share = f => pct(rows.filter(f).length / n, 0);
-  const vs = keys.slice(1).map(([k, c, d]) => `${RB_ITEMS.find(x => x[0] === k)[1]}：報酬贏 <b>${share(r => r.cagr > r[c])}</b>、回撤小 <b>${share(r => r.mdd > r[d])}</b>`).join('<br>');
+  const vs = keys.slice(1).map(([k, c, d]) => `${rbLabel(k)}：報酬贏 <b>${share(r => r.cagr > r[c])}</b>、回撤小 <b>${share(r => r.mdd > r[d])}</b>`).join('<br>');
   $('results').innerHTML = `<section class="card"><h3>${n.toLocaleString()} 條 ${m.years} 年模擬行情 · 每段${BLOCK_LABEL[m.block]}</h3>
     <p class="hint">${esc(cfgLabel(m.cfg))} · 取樣 ${o.from}～${o.to}${state.useSyn ? '（含上市前模擬）' : '（只用真實資料）'}。模擬行情沒有日曆，「每季」用 63 個交易日近似。</p>
-    <p class="hint">策略 vs ${vs}</p>
+    <p class="hint">你的設定 vs ${vs}</p>
     ${rebalCompareTable(sets)}</section>
     <section class="card"><h3>每一條模擬：0050 買進持有 vs 再平衡策略（年化報酬）</h3><div class="chart-box" id="cScatter"></div>
     <p class="hint">虛線上方 = 那條行情再平衡策略賺得比 0050 買進持有多。</p></section>`;
@@ -1023,8 +1039,8 @@ function renderRbMCCompare(m) {
   const pc = (rows, f) => pct(rows.filter(f).length / rows.length, 0);
   const q = (a, p) => E.quantile([...a].sort((x, y) => x - y), p);
   $('results').innerHTML = `<section class="card"><h3>各種區塊長度比較（每組 ${m.n.toLocaleString()} 條 ${m.years} 年）</h3>
-    <p class="hint">${esc(cfgLabel(m.cfg))}。每格上面是再平衡策略的年化中位數 / 回撤中位數，下面是報酬贏過對照組的機率。</p>
-    <div class="tbl-wrap"><table class="cmp-tbl"><thead><tr><th>每段</th><th>再平衡策略</th>${m.out[0].rows[0]?.noTrCagr !== undefined ? '<th>vs 不搭配均線</th>' : ''}<th>vs 不再平衡</th><th>vs 0050 持有</th><th>vs 00631L 均線</th></tr></thead><tbody>
+    <p class="hint">${esc(cfgLabel(m.cfg))}。每格上面是你的設定的年化中位數 / 回撤中位數，下面是報酬贏過對照組的機率。</p>
+    <div class="tbl-wrap"><table class="cmp-tbl"><thead><tr><th>每段</th><th>你的設定</th>${m.out[0].rows[0]?.noTrCagr !== undefined ? '<th>vs 不搭配均線</th>' : ''}<th>vs 不再平衡</th><th>vs 0050 持有</th><th>vs 00631L 均線</th></tr></thead><tbody>
     ${m.out.map(o => { const r = o.rows; return `<tr><td class="lbl">${BLOCK_LABEL[o.block]}</td>
       <td class="n pair"><b>${pct(q(r.map(x => x.cagr), .5), 1, true)}</b><small>${pct(q(r.map(x => x.mdd), .5), 0)}</small></td>
       ${[...(r[0]?.noTrCagr !== undefined ? [['noTrCagr', 'noTrMdd']] : []), ['flatCagr', 'flatMdd'], ['bhCagr', 'bhMdd'], ['trCagr', 'trMdd']].map(([c, d]) => `<td class="n pair"><b>${pc(r, x => x.cagr > x[c])}</b><small>回撤小 ${pc(r, x => x.mdd > x[d])}</small></td>`).join('')}</tr>`; }).join('')}

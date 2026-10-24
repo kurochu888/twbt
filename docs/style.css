@@ -287,3 +287,4 @@ td.pair small { color: var(--muted); display: block; font-size: 11.5px; }
 /* 有新版本的提示（跟 finance-app 一樣在最上面） */
 .update-banner { position: sticky; top: 0; z-index: 50; display: block; width: 100%; border: 0; padding: 10px 16px;
   background: var(--accent); color: #fff; font: inherit; font-size: 14px; cursor: pointer; }
+.cmp-tbl tr.grp td { font-size: 11.5px; color: var(--muted); padding-top: 10px; border-bottom: 0; text-align: left; }
