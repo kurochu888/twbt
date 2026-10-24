@@ -44,24 +44,35 @@ class TestBuyHold(unittest.TestCase):
     def tearDownClass(cls):
         cls.tmp.cleanup()
 
+    def _lot_price(self, bh, day):
+        # 沒有實際收盤價檔時，每股價格以最後一天 = 1 往回推；一張 = 1000 股
+        i = bh.rets.index.get_loc(pd.Timestamp(day))
+        return 1000 * bh.lots["0050"]["px"][i]
+
     def test_no_cost_matches_compounding(self):
         bh = BuyHold(self.dir, cost=NO_COST)
         eq = bh.equity("0050", "2001-01-01", "2001-12-31")
         days = len(eq) - 1
-        self.assertAlmostEqual(eq.iloc[-1], 1_000_000 * 1.0004 ** days, places=4)
+        pl = self._lot_price(bh, eq.index[0])
+        n = int(1_000_000 // pl)                        # 整張：買得起的最多張數，剩下放現金
+        self.assertAlmostEqual(eq.iloc[-1], 1_000_000 - n * pl + n * pl * 1.0004 ** days, places=4)
+        self.assertAlmostEqual(eq.iloc[-1] / 1_000_000, 1.0004 ** days, places=3)
 
     def test_costs(self):
         c = TaiwanCost(discount=0.5)
-        self.assertAlmostEqual(c.buy_cost(1_000_000, "etf"), 1_000_000 * 0.001425 * 0.5)
+        self.assertEqual(c.buy_cost(1_000_000, "etf"), 713)               # 712.5 四捨五入
         self.assertEqual(c.buy_cost(1000, "etf"), 20.0)                 # 最低 20 元
-        self.assertAlmostEqual(c.sell_cost(1_000_000, "etf"), 712.5 + 1000)   # ETF 稅 0.1%
-        self.assertAlmostEqual(c.sell_cost(1_000_000, "stock"), 712.5 + 3000)
+        self.assertEqual(c.sell_cost(1_000_000, "etf"), 1713)           # 712.5 + ETF 稅 0.1% 1000
+        self.assertEqual(c.sell_cost(1_000_000, "stock"), 3713)
         self.assertEqual(c.sell_cost(1_000_000, "index"), 0.0)
         bh = BuyHold(self.dir, cost=TaiwanCost())
         eq = bh.equity("0050", "2001-01-01", "2001-12-31")
         days = len(eq) - 1
-        gross = (1_000_000 - 1425) * 1.0004 ** days
-        self.assertAlmostEqual(eq.iloc[-1], gross - gross * 0.001425 - gross * 0.001, places=4)
+        pl = self._lot_price(bh, eq.index[0])
+        n = int(1_000_000 // (pl * 1.001425))
+        cash = 1_000_000 - n * pl - np.floor(n * pl * 0.001425 + 0.5)
+        gross = n * pl * 1.0004 ** days
+        self.assertAlmostEqual(eq.iloc[-1], cash + gross - np.floor(gross * 0.002425 + 0.5), places=4)
         # 大盤是基準，不扣成本
         eq_m = bh.equity("TAIEX", "2001-01-01", "2001-12-31")
         self.assertAlmostEqual(eq_m.iloc[-1], 1_000_000 * 1.0004 ** days, places=4)

@@ -1,4 +1,4 @@
-// 買進持有回測引擎（瀏覽器版）。邏輯與 twbt/backtest/buyhold.py 相同，結果已和 Python 對照驗證。
+// 回測引擎（瀏覽器版）。邏輯與 twbt/backtest/ 相同（整張交易：一張 1000 股），結果已和 Python 對照驗證。
 // 純計算、不碰畫面，方便在 Node 裡測試。
 
 export const TRADING_DAYS = 252;
@@ -35,6 +35,7 @@ export function prepare(json) {
       sigRet: a.sig_ret ? dec(a.sig_ret) : null,
       sigRetConservative: a.sig_ret_conservative ? dec(a.sig_ret_conservative) : null,
       halt: new Set(a.halt || []),
+      pxLast: a.px_last ?? null, splits: a.splits || [],
     };
   }
   // 每個交易日距離前一個交易日幾年（日曆天 ÷ 365.25）：現金利息、蒙地卡羅的年數照日曆時間算（1990 年代週六也開盤）
@@ -64,13 +65,96 @@ export function isSynthetic(data, code, i) {
 // ---------- 成本 ----------
 export const TAX = { stock: 0.003, etf: 0.001, index: 0 };
 export function makeCost({ commission = 0.001425, discount = 1, minFee = 20, tax = TAX } = {}) {
-  // 免手續費（折扣 0）時連最低 20 元也不收
+  // 免手續費（折扣 0）時連最低 20 元也不收；買賣成本都四捨五入到整數元（跟 finance-app 的 defaultFee 一樣）
   const fee = (amt, kind) => (kind === 'index' || amt <= 0 || !(commission * discount > 0)) ? 0 : Math.max(amt * commission * discount, minFee);
   return {
-    rate: commission * discount,
-    buy: (amt, kind) => fee(amt, kind),
-    sell: (amt, kind) => fee(amt, kind) + amt * (tax[kind] ?? 0),
+    commission, discount, rate: commission * discount,
+    buy: (amt, kind) => Math.floor(fee(amt, kind) + 0.5),
+    sell: (amt, kind) => Math.floor(fee(amt, kind) + amt * (tax[kind] ?? 0) + 0.5),
   };
+}
+
+// ---------- 整張交易（一張 = 1000 股）：跟 twbt/backtest/lots.py 逐行對應 ----------
+export const LOT = 1000;
+// 每股價格（以最新收盤為錨、用不含配息的價格報酬往回推，單位是「現在的一股」）、每張股數（分割前 = 1000 × 分割倍數）、每股配息
+const lotCache = new Map();
+export function lotSeries(data, code, opts) {
+  const key = [code, opts.useSynthetic !== false, opts.tw50Excess !== false].join('|');
+  if (lotCache.has(key)) return lotCache.get(key);
+  const a = data.assets[code], n = data.days.length;
+  const r = returnsFor(data, code, opts), s = priceReturnsFor(data, code, opts);
+  const px = new Float64Array(n).fill(NaN), lot = new Float64Array(n).fill(LOT), div = new Float64Array(n);
+  px[n - 1] = a.pxLast ?? 1;
+  for (let t = n - 1; t > 0; t--) {
+    if (Number.isNaN(s[t]) || Number.isNaN(px[t])) break;
+    px[t - 1] = px[t] / (1 + s[t]);
+  }
+  for (const [at, ratio] of a.splits) for (let t = 0; t < at; t++) lot[t] *= ratio;
+  for (let t = 1; t < n; t++) {
+    if (!(Number.isNaN(r[t]) || Number.isNaN(s[t]) || Number.isNaN(px[t - 1])) && r[t] !== s[t]) div[t] = px[t - 1] * (r[t] - s[t]) / (1 + r[t]);
+  }
+  const out = { px, lot, div };
+  if (lotCache.size >= 12) lotCache.delete(lotCache.keys().next().value);
+  lotCache.set(key, out);
+  return out;
+}
+
+// 一筆錢：現金 + 股數（整張買賣）
+export class LotAccount {
+  constructor(capital, cost, kind) { this.cash = capital; this.shares = 0; this.cost = cost; this.kind = kind; this.rate = cost.rate; }
+  maxLots(budget, lotPrice) {           // 這筆預算（含手續費）最多買幾張
+    budget = Math.min(budget, this.cash);
+    if (!(budget > 0 && lotPrice > 0)) return 0;
+    let n = Math.floor(budget / (lotPrice * (1 + this.rate)));
+    while (n > 0 && n * lotPrice + this.cost.buy(n * lotPrice, this.kind) > budget) n--;   // 最低手續費 20 元時可能還不夠
+    return n;
+  }
+  buyLots(n, px, lot) {
+    if (n <= 0) return false;
+    const gross = n * px * lot;
+    this.cash -= gross + this.cost.buy(gross, this.kind); this.shares += n * lot;
+    return true;
+  }
+  buyMax(budget, px, lot) { return this.buyLots(this.maxLots(budget, px * lot), px, lot); }
+  sellShares(shares, px) {
+    if (shares <= 0) return false;
+    const gross = shares * px;
+    this.cash += gross - this.cost.sell(gross, this.kind); this.shares -= shares;
+    return true;
+  }
+  sellAll(px) { return this.sellShares(this.shares, px); }
+  value(px) { return this.cash + this.shares * px; }
+  finalValue(px) {                       // 期末全部賣出後的金額
+    if (this.shares <= 0) return this.cash;
+    const gross = this.shares * px;
+    return this.cash + gross - this.cost.sell(gross, this.kind);
+  }
+}
+
+// 買進持有（整張）：期初買最多張數；除息那天現金夠一張就再投入；期末賣出
+function bhPath(data, code, si, ei, opts) {
+  const { capital = 1_000_000, cost = makeCost() } = opts;
+  const a = data.assets[code], eq = new Float64Array(ei - si + 1);
+  if (a.kind === 'index') {               // 大盤不能交易：照指數算、不扣成本
+    const r = returnsFor(data, code, opts);
+    eq[0] = capital;
+    for (let i = si + 1; i <= ei; i++) eq[i - si] = eq[i - si - 1] * (1 + r[i]);
+    return { eq, lots0: null };
+  }
+  const { px, lot, div } = lotSeries(data, code, opts);
+  const acct = new LotAccount(capital, cost, a.kind);
+  acct.buyMax(acct.cash, px[si], lot[si]);
+  const lots0 = acct.shares / lot[si];
+  eq[0] = acct.value(px[si]);
+  for (let t = si + 1; t <= ei; t++) {
+    if (div[t] !== 0) {
+      acct.cash += acct.shares * div[t];
+      if (!a.halt.has(t)) acct.buyMax(acct.cash, px[t], lot[t]);
+    }
+    eq[t - si] = acct.value(px[t]);
+  }
+  eq[eq.length - 1] = acct.finalValue(px[ei]);
+  return { eq, lots0, lotPrice: px[si] * lot[si] };
 }
 
 // ---------- 區間 ----------
@@ -156,12 +240,10 @@ export function period(data, codes, startIso, endIso, opts) {
       skipped.push({ code, name: a.name, availableFrom: dayToIso(data.days[fr]) });
       continue;
     }
-    const eq = new Float64Array(ei - si + 1);
-    eq[0] = capital - cost.buy(capital, a.kind);
-    for (let i = si + 1; i <= ei; i++) eq[i - si] = eq[i - si - 1] * (1 + r[i]);
-    eq[eq.length - 1] -= cost.sell(eq[eq.length - 1], a.kind);
+    const { eq, lots0, lotPrice } = bhPath(data, code, si, ei, opts);
     const dayIdx = data.days.subarray(si, ei + 1);
     const st = summarize(eq, dayIdx, opts.rf ?? 0);
+    st.lots0 = lots0; st.lotPrice = lotPrice ?? null;
     let syn = 0;
     for (let i = si; i <= ei; i++) if (isSynthetic(data, code, i)) syn++;
     st.syntheticShare = syn / (ei - si + 1);
@@ -174,20 +256,18 @@ export function period(data, codes, startIso, endIso, opts) {
 
 // ---------- 多區間 ----------
 function windowStats(data, code, r, si, ei, opts) {
-  const { capital = 1_000_000, cost = makeCost() } = opts;
+  const { capital = 1_000_000 } = opts;
   if (ei - si < 20) return null;
   for (let i = si + 1; i <= ei; i++) if (Number.isNaN(r[i])) return null;
-  const kind = data.assets[code].kind;
-  const inv = 1 - cost.buy(capital, kind) / capital;
-  let v = inv, peak = inv, mdd = 0;
+  const { eq } = bhPath(data, code, si, ei, opts);
+  let peak = eq[0], mdd = 0;
   const daily = [];
-  for (let i = si + 1; i <= ei; i++) {
-    v *= 1 + r[i]; daily.push(r[i]);
-    if (v > peak) peak = v;
-    const dd = v / peak - 1; if (dd < mdd) mdd = dd;
+  for (let i = 0; i < eq.length; i++) {
+    if (i > 0) daily.push(eq[i] / eq[i - 1] - 1);
+    if (eq[i] > peak) peak = eq[i];
+    const dd = eq[i] / peak - 1; if (dd < mdd) mdd = dd;
   }
-  const final = v * capital;
-  const net = (final - cost.sell(final, kind)) / capital;
+  const net = eq[eq.length - 1] / capital;
   const years = (data.days[ei] - data.days[si]) / 365.25;
   let syn = 0;
   for (let i = si; i <= ei; i++) if (isSynthetic(data, code, i)) syn++;
@@ -361,6 +441,11 @@ function signalReturnsFor(data, code, opts) {
   return r;
 }
 
+// 每股價格用的報酬：一律不含配息（只還原分割）。正2 不配息，就是總報酬
+function priceReturnsFor(data, code, opts) {
+  return signalReturnsFor(data, code, { ...opts, signalPrice: 'raw' });
+}
+
 const prepCache = new Map();
 export function trendPrep(data, code, opts, p) {
   const key = [code, opts.useSynthetic !== false, opts.tw50Excess !== false, opts.signalPrice || 'raw', JSON.stringify(p)].join('|');
@@ -394,46 +479,33 @@ export function trendPrep(data, code, opts, p) {
   return out;
 }
 
-function trendSim(prep, p, kind, si, ei, opts, keepEvents) {
+function trendSim(data, code, prep, p, si, ei, opts, keepEvents) {
   const { capital = 1_000_000, cost = makeCost() } = opts;
-  const rate = cost.rate;
-  const { i0, price, act, status, layers } = prep;
-  let cash = capital, units = 0;
-  const buy = (amount, px) => {
-    amount = Math.min(amount, cash);
-    if (amount <= 0) return;
-    const fee = cost.buy(amount / (1 + rate), kind);
-    const gross = amount - fee;
-    if (gross <= 0) return;
-    cash -= gross + fee; units += gross / px;
-  };
-  const sellAll = px => {
-    if (units <= 0) return;
-    const gross = units * px;
-    cash += gross - cost.sell(gross, kind); units = 0;
-  };
+  const kind = data.assets[code].kind, halt = data.assets[code].halt;
+  const { i0, act, status, layers } = prep;
+  const { px: PX, lot: LOTS, div: DIV } = lotSeries(data, code, opts);
+  const acct = new LotAccount(capital, cost, kind);
   const j0 = si - i0, st0 = status[j0], k0 = layers[j0];
   let cashAtExit = capital;
-  if (st0 === STATUS.HOLD) buy(cash, price[j0]);
-  else if (st0 === STATUS.WAIT && k0 > 0) buy(cashAtExit * k0 / p.pyramidLevels, price[j0]);
+  if (st0 === STATUS.HOLD) acct.buyMax(acct.cash, PX[si], LOTS[si]);
+  else if (st0 === STATUS.WAIT && k0 > 0) acct.buyMax(cashAtExit * k0 / p.pyramidLevels, PX[si], LOTS[si]);
   const eq = new Float64Array(ei - si + 1);
-  eq[0] = cash + units * price[j0];
+  eq[0] = acct.value(PX[si]);
   const events = [];
-  let peak = eq[0], mdd = 0, inMarket = units > 0 ? 1 : 0;
+  let peak = eq[0], mdd = 0, inMarket = acct.shares > 0 ? 1 : 0;
   for (let t = si + 1; t <= ei; t++) {
-    const j = t - i0, a = act[j], px = price[j];
-    if (a === ACT.RECOVER) buy(cash, px);
-    else if (a === ACT.ADD) buy(cashAtExit / p.pyramidLevels, px);
-    else if (a === ACT.EXIT) { sellAll(px); cashAtExit = cash; }
-    const v = cash + units * px;
-    if (a && keepEvents) events.push({ i: t, act: a, layer: layers[j], value: v });
+    const j = t - i0, a = act[j], px = PX[t], lot = LOTS[t];
+    if (DIV[t] !== 0) acct.cash += acct.shares * DIV[t];          // 配息發現金
+    if (a === ACT.RECOVER) acct.buyMax(acct.cash, px, lot);
+    else if (a === ACT.ADD) acct.buyMax(cashAtExit / p.pyramidLevels, px, lot);
+    else if (a === ACT.EXIT) { acct.sellAll(px); cashAtExit = acct.cash; }
+    else if (DIV[t] !== 0 && status[j] === STATUS.HOLD && !halt.has(t)) acct.buyMax(acct.cash, px, lot);   // 續抱中配息再投入
+    const v = acct.value(px);
+    if (a && keepEvents) events.push({ i: t, act: a, layer: layers[j], value: v, price: px * lot / LOT, lots: acct.shares / lot });
     eq[t - si] = v;
-    if (units > 0) inMarket++;
+    if (acct.shares > 0) inMarket++;
   }
-  if (units > 0) {
-    const gross = units * price[ei - i0];
-    eq[eq.length - 1] = cash + gross - cost.sell(gross, kind);
-  }
+  eq[eq.length - 1] = acct.finalValue(PX[ei]);
   for (const v of eq) { if (v > peak) peak = v; const d = v / peak - 1; if (d < mdd) mdd = d; }
   return { eq, events, st0, k0, mdd, inMarket: inMarket / eq.length };
 }
@@ -460,7 +532,7 @@ export function trendPeriod(data, codes, startIso, endIso, opts, custom) {
     const r = one.results[0];
     if (!r) continue;
     const si = data.days.indexOf(r.dayIdx[0]), ei = si + r.dayIdx.length - 1;
-    const sim = trendSim(prep, p, data.assets[r.code].kind, si, ei, opts, true);
+    const sim = trendSim(data, r.code, prep, p, si, ei, opts, true);
     const st = summarize(sim.eq, r.dayIdx, opts.rf ?? 0);
     st.syntheticShare = r.stats.syntheticShare; st.syntheticUntil = r.stats.syntheticUntil;
     st.inMarket = sim.inMarket;
@@ -489,7 +561,7 @@ export function trendWindows(data, codes, wins, opts, custom) {
       const bh = bhMap.get(c + '|' + dayToIso(data.days[si]) + '|' + dayToIso(data.days[ei]));
       const prep = preps[c];
       if (!bh || !prep || si < prep.minSi) continue;   // 均線還算不出來的起點不比
-      const sim = trendSim(prep, trendParamsFor(c, custom), data.assets[c].kind, si, ei, opts, false);
+      const sim = trendSim(data, c, prep, trendParamsFor(c, custom), si, ei, opts, false);
       const net = sim.eq[sim.eq.length - 1] / (opts.capital ?? 1_000_000);
       rows.push({
         code: c, start: bh.start, end: bh.end, years: bh.years,
@@ -510,45 +582,54 @@ function geometric(rnd, p) {
 }
 
 export function mcSource(data, code, opts) {
-  const r = returnsFor(data, code, opts), s = signalReturnsFor(data, code, opts);
-  const rr = [], ss = [], dd = [];
-  for (let i = 0; i < r.length; i++) if (!Number.isNaN(r[i]) && !Number.isNaN(s[i])) { rr.push(r[i]); ss.push(s[i]); dd.push(data.dt[i]); }
+  const r = returnsFor(data, code, opts), s = signalReturnsFor(data, code, opts), q = priceReturnsFor(data, code, opts);
+  const rr = [], ss = [], qq = [], dd = [];
+  for (let i = 0; i < r.length; i++) if (!Number.isNaN(r[i]) && !Number.isNaN(s[i]) && !Number.isNaN(q[i])) { rr.push(r[i]); ss.push(s[i]); qq.push(q[i]); dd.push(data.dt[i]); }
   let first = -1;
   for (let i = 0; i < r.length; i++) if (!Number.isNaN(r[i])) { first = i; break; }
-  return { r: Float64Array.from(rr), s: Float64Array.from(ss), dt: Float64Array.from(dd), from: first > 0 ? dayToIso(data.days[first]) : '－', to: dayToIso(data.days[data.days.length - 1]) };
+  return { r: Float64Array.from(rr), s: Float64Array.from(ss), q: Float64Array.from(qq), dt: Float64Array.from(dd), px0: data.assets[code].pxLast ?? 1,
+    from: first > 0 ? dayToIso(data.days[first]) : '－', to: dayToIso(data.days[data.days.length - 1]) };
+}
+
+// 模擬路徑的每股價格與配息：從現在的每股價格出發、一張 1000 股、沒有分割（跟 montecarlo.py 的 path_prices 一樣）
+function pathPrices(r, q, px0) {
+  const n = r.length + 1, px = new Float64Array(n), div = new Float64Array(n);
+  px[0] = px0;
+  for (let j = 1; j < n; j++) {
+    px[j] = px[j - 1] * (1 + q[j - 1]);
+    if (r[j - 1] !== q[j - 1]) div[j] = px[j - 1] * (r[j - 1] - q[j - 1]) / (1 + r[j - 1]);
+  }
+  return { px, div };
 }
 
 function mcPath(src, idx, p, warm, kind, cost, capital) {
   let years = 0;
   for (let j = warm; j < idx.length; j++) years += src.dt[idx[j]];   // 這條路徑實際經過的日曆時間
   const n = idx.length + 1;
-  const price = new Float64Array(n), spx = new Float64Array(n);
-  price[0] = spx[0] = 1;
-  for (let j = 1; j < n; j++) { price[j] = price[j - 1] * (1 + src.r[idx[j - 1]]); spx[j] = spx[j - 1] * (1 + src.s[idx[j - 1]]); }
-  const { act } = signals(spx, p);
-  const rate = cost.rate;
-  let cash = capital, units = 0, cashAtExit = capital, trades = 0;
-  const buy = (amount, px) => {
-    amount = Math.min(amount, cash); if (amount <= 0) return;
-    const fee = cost.buy(amount / (1 + rate), kind), gross = amount - fee;
-    if (gross <= 0) return;
-    cash -= gross + fee; units += gross / px;
-  };
+  const spx = new Float64Array(n), rr = new Float64Array(n - 1), qq = new Float64Array(n - 1);
+  spx[0] = 1;
+  for (let j = 1; j < n; j++) { spx[j] = spx[j - 1] * (1 + src.s[idx[j - 1]]); rr[j - 1] = src.r[idx[j - 1]]; qq[j - 1] = src.q[idx[j - 1]]; }
+  const { px, div } = pathPrices(rr, qq, src.px0);
+  const { act, status } = signals(spx, p);
+  const acct = new LotAccount(capital, cost, kind);
+  let cashAtExit = capital, trades = 0;
   let peak = capital, mdd = 0, v = capital;
   for (let t = warm + 1; t < n; t++) {
-    const a = act[t], px = price[t];
-    if (a === ACT.RECOVER) { buy(cash, px); trades++; }
-    else if (a === ACT.ADD) { buy(cashAtExit / p.pyramidLevels, px); trades++; }
-    else if (a === ACT.EXIT) { if (units > 0) { const g = units * px; cash += g - cost.sell(g, kind); units = 0; } cashAtExit = cash; trades++; }
-    v = cash + units * px;
-    if (t === n - 1 && units > 0) { const g = units * px; v = cash + g - cost.sell(g, kind); }
+    const a = act[t];
+    if (div[t] !== 0) acct.cash += acct.shares * div[t];
+    if (a === ACT.RECOVER) { acct.buyMax(acct.cash, px[t], LOT); trades++; }
+    else if (a === ACT.ADD) { acct.buyMax(cashAtExit / p.pyramidLevels, px[t], LOT); trades++; }
+    else if (a === ACT.EXIT) { acct.sellAll(px[t]); cashAtExit = acct.cash; trades++; }
+    else if (div[t] !== 0 && status[t] === STATUS.HOLD) acct.buyMax(acct.cash, px[t], LOT);
+    v = t === n - 1 ? acct.finalValue(px[t]) : acct.value(px[t]);
     if (v > peak) peak = v; else if (v / peak - 1 < mdd) mdd = v / peak - 1;
   }
-  const inv = capital - cost.buy(capital, kind);
-  let bpeak = inv, bmdd = 0, bv = inv;
+  const b = new LotAccount(capital, cost, kind);
+  b.buyMax(b.cash, px[warm], LOT);
+  let bv = b.value(px[warm]), bpeak = bv, bmdd = 0;
   for (let t = warm + 1; t < n; t++) {
-    bv = inv * price[t] / price[warm];
-    if (t === n - 1) bv -= cost.sell(bv, kind);
+    if (div[t] !== 0) { b.cash += b.shares * div[t]; b.buyMax(b.cash, px[t], LOT); }
+    bv = t === n - 1 ? b.finalValue(px[t]) : b.value(px[t]);
     if (bv > bpeak) bpeak = bv; else if (bv / bpeak - 1 < bmdd) bmdd = bv / bpeak - 1;
   }
   const cg = x => (x > 0 ? x ** (1 / years) - 1 : -1);
@@ -602,7 +683,6 @@ export function mcSummary(rows) {
 export const REBAL_ASSETS = ['0050', '00631L', '00675L'];
 const LEVERAGED = new Set(['00631L', '00675L']);
 const MIN_TRADE = 1000;   // 再平衡時單筆不到 1,000 元就不交易（跟 Python 版一樣）
-const DUST = 0.01;          // 不到 1 分錢不交易（浮點誤差的零頭）
 export const EXPOSURE = { '0050': 1, '00631L': 2, '00675L': 2, CASH: 0 };
 
 export function normWeights(weights) {
@@ -640,16 +720,20 @@ function rebalCtx(data, cfg, opts, custom) {
       first = Math.max(first, preps[c].prep.minSi);
     }
   }
-  return { w, codes, R, preps, first };
+  const L = Object.fromEntries(codes.map(c => [c, lotSeries(data, c, opts)]));
+  return { w, codes, R, preps, first,
+    PX: Object.fromEntries(codes.map(c => [c, L[c].px])), LOTS: Object.fromEntries(codes.map(c => [c, L[c].lot])),
+    DIV: Object.fromEntries(codes.map(c => [c, L[c].div])) };
 }
 
 function rebalSim(data, ctx, cfg, si, ei, opts, keepLog) {
-  const { w, codes, R, preps } = ctx;
+  const { w, codes, preps, PX, LOTS, DIV } = ctx;
   const keyAt = ctx.keyAt ?? (t => periodKey(data.days[t], cfg.freq));
-  const cost = opts.cost ?? makeCost(), capital = opts.capital ?? 1_000_000, rate = cost.rate;
+  const cost = opts.cost ?? makeCost(), capital = opts.capital ?? 1_000_000;
   const cashG = 1 + (cfg.cashRate ?? 0), dtAt = ctx.dt ? (t => ctx.dt[t]) : (t => data.dt[t]);
-  const h = Object.fromEntries(codes.map(c => [c, 0]));
-  let cash = capital, trades = 0;
+  const kind = c => (ctx.kind ? ctx.kind[c] : data.assets[c].kind);
+  const acct = Object.fromEntries(codes.map(c => [c, new LotAccount(0, cost, kind(c))]));   // 每一檔的股數（現金統一放 cash）
+  let cash = capital, trades = 0, curT = si;
   const log = [];
   const frac = (c, t) => {
     const g = preps[c]; if (!g) return 1;
@@ -661,24 +745,35 @@ function rebalSim(data, ctx, cfg, si, ei, opts, keepLog) {
     for (const c of codes) { tw[c] = w[c] * frac(c, t); s += tw[c]; }
     tw.CASH = 1 - s; return tw;
   };
-  const kind = c => (ctx.kind ? ctx.kind[c] : data.assets[c].kind);
-  // 不到 1 分錢的「交易」是浮點誤差留下的零頭，不算（不然免手續費時會多算交易次數，Python／網頁也可能不同）
-  const sell = (c, amt, smallOk) => { if (amt < DUST || (amt < MIN_TRADE && !smallOk)) return; cash += amt - cost.sell(amt, kind(c)); h[c] -= amt; trades++; };
-  const buy = (c, amt, smallOk) => {
-    amt = Math.min(amt, cash); if (amt < DUST || (amt < MIN_TRADE && !smallOk)) return;
-    const fee = cost.buy(amt / (1 + rate), kind(c)), gross = amt - fee;
-    if (gross <= 0) return;
-    cash -= amt; h[c] += gross; trades++;
-  };
-  const total = () => { let v = cash; for (const c of codes) v += h[c]; return v; };
-  // smallOk：期初建立部位、均線訊號的進出不受 MIN_TRADE 限制；目標 0（出場）一定全部賣掉
-  let curT = si;
+  const hold = c => acct[c].shares * PX[c][curT];
+  const total = () => { let v = cash; for (const c of codes) v += hold(c); return v; };
   // 暫停交易（分割）的日子不能買賣：定期再平衡先跳過那一檔，下次檢查再調（模擬路徑沒有暫停交易日）
   const halted = c => !ctx.dt && data.assets[c].halt.has(curT);
+  // smallOk：期初建立部位、均線訊號的進出不受 MIN_TRADE 限制；目標 0（出場）一定全部賣掉
   const tradeTo = (tw, only, smallOk) => {
     const V = total(), sel = only ? [only] : codes.filter(c => smallOk || !halted(c));
-    for (const c of sel) if (h[c] > tw[c] * V) sell(c, h[c] - tw[c] * V, smallOk || tw[c] === 0);
-    for (const c of sel) if (h[c] < tw[c] * V) buy(c, tw[c] * V - h[c], smallOk);
+    const want = {};
+    for (const c of sel) want[c] = tw[c] === 0 ? 0 : Math.floor(tw[c] * V / (PX[c][curT] * LOTS[c][curT]) + 0.5);   // 最接近目標的張數
+    for (const c of sel) {                                    // 先賣
+      const a = acct[c], lot = LOTS[c][curT], have = Math.round(a.shares / lot);
+      if (have > want[c]) {
+        const g = (have - want[c]) * lot * PX[c][curT];
+        if (g < MIN_TRADE && !(smallOk || tw[c] === 0)) continue;
+        a.cash = 0; a.sellShares(want[c] === 0 ? a.shares : (have - want[c]) * lot, PX[c][curT]);
+        cash += a.cash; trades++;
+      }
+    }
+    for (const c of sel) {                                    // 再用現金買
+      const a = acct[c], lot = LOTS[c][curT], have = Math.round(a.shares / lot);
+      if (have < want[c]) {
+        const pl = PX[c][curT] * lot;
+        a.cash = cash;
+        const n = Math.min(want[c] - have, a.maxLots(cash, pl));
+        if (n <= 0 || (n * pl < MIN_TRADE && !smallOk)) continue;
+        a.buyLots(n, PX[c][curT], lot);
+        cash = a.cash; trades++;
+      }
+    }
   };
   tradeTo(target(si), null, true);
   const eq = new Float64Array(ei - si + 1);
@@ -686,8 +781,8 @@ function rebalSim(data, ctx, cfg, si, ei, opts, keepLog) {
   let lastKey = keyAt(si);
   for (let t = si + 1; t <= ei; t++) {
     curT = t;
-    for (const c of codes) h[c] *= 1 + R[c][t];
     cash *= cashG ** dtAt(t);
+    for (const c of codes) if (DIV[c][t] !== 0) cash += acct[c].shares * DIV[c][t];   // 配息發現金
     const tw = target(t);
     if (cfg.trend) for (const c of codes) {
       const g = preps[c];
@@ -699,12 +794,12 @@ function rebalSim(data, ctx, cfg, si, ei, opts, keepLog) {
     if (check) {
       const V = total();
       let dev = Math.abs(cash / V - tw.CASH);
-      for (const c of codes) dev = Math.max(dev, Math.abs(h[c] / V - tw[c]));
+      for (const c of codes) dev = Math.max(dev, Math.abs(hold(c) / V - tw[c]));
       if (!(cfg.band > 0) || dev > cfg.band + 1e-12) { const n0 = trades; tradeTo(tw); if (keepLog && trades > n0) log.push({ i: t, what: '再平衡' }); }
     }
     eq[t - si] = total();
   }
-  for (const c of codes) if (h[c] > 0) eq[eq.length - 1] -= cost.sell(h[c], kind(c));
+  for (const c of codes) if (acct[c].shares > 0) eq[eq.length - 1] -= cost.sell(hold(c), kind(c));
   return { eq, trades, log };
 }
 
@@ -757,24 +852,27 @@ export function rebalMcPath(data, cfg, opts, custom, idx, warm, yearsIn, srcIn) 
   const w = normWeights(cfg.weights);
   const codes = Object.keys(w).filter(k => k !== 'CASH');
   const need = new Set([...codes, '0050', '00631L']);           // 對照組要用到 0050、00631L
-  const src = srcIn ?? Object.fromEntries([...need].map(c => [c, { r: returnsFor(data, c, opts), s: signalReturnsFor(data, c, opts) }]));
+  const src = srcIn ?? Object.fromEntries([...need].map(c => [c, { r: returnsFor(data, c, opts), s: signalReturnsFor(data, c, opts), q: priceReturnsFor(data, c, opts) }]));
   const n = idx.length + 1;
-  const R = {}, preps = {}, kind = {};
+  const R = {}, preps = {}, kind = {}, PX = {}, LOTS = {}, DIV = {};
   const dtp = new Float64Array(n);
   let years = 0;
   for (let j = 1; j < n; j++) { dtp[j] = data.dt[idx[j - 1]]; if (j > warm) years += dtp[j]; }   // 實際經過的日曆時間
   for (const c of need) {
     const r = new Float64Array(n), spx = new Float64Array(n);
     spx[0] = 1;
-    for (let j = 1; j < n; j++) { r[j] = src[c].r[idx[j - 1]]; spx[j] = spx[j - 1] * (1 + src[c].s[idx[j - 1]]); }
+    const q = new Float64Array(n - 1);
+    for (let j = 1; j < n; j++) { r[j] = src[c].r[idx[j - 1]]; q[j - 1] = src[c].q[idx[j - 1]]; spx[j] = spx[j - 1] * (1 + src[c].s[idx[j - 1]]); }
     R[c] = r; kind[c] = data.assets[c].kind;
+    const pp = pathPrices(r.subarray(1), q, data.assets[c].pxLast ?? 1);
+    PX[c] = pp.px; DIV[c] = pp.div; LOTS[c] = new Float64Array(n).fill(LOT);
     if (LEVERAGED.has(c)) {
       const p = trendParamsFor(c, custom), sig = signals(spx, p);
       preps[c] = { prep: { i0: 0, ...sig }, levels: p.pyramidLevels, p };
     }
   }
   const fd = FREQ_DAYS[cfg.freq];
-  const mk = (cf, cs) => ({ w: normWeights(cf.weights), codes: cs, R, kind, dt: dtp,
+  const mk = (cf, cs) => ({ w: normWeights(cf.weights), codes: cs, R, kind, dt: dtp, PX, LOTS, DIV,
     preps: cf.trend ? Object.fromEntries(cs.filter(c => preps[c]).map(c => [c, preps[c]])) : {},
     keyAt: t => (fd ? Math.floor((t - warm) / fd) : null) });
   const ei = n - 1, capital = opts.capital ?? 1_000_000;
@@ -805,10 +903,10 @@ export async function rebalMonteCarlo(data, cfg, opts, custom, { n = 1000, years
   const w = normWeights(cfg.weights);
   const codes = [...new Set([...Object.keys(w).filter(k => k !== 'CASH'), '0050', '00631L'])];
   // 可抽樣的日子：每一檔都有資料
-  const rs = codes.map(c => [returnsFor(data, c, opts), signalReturnsFor(data, c, opts)]);
-  const src = Object.fromEntries(codes.map((c, i) => [c, { r: rs[i][0], s: rs[i][1] }]));
+  const rs = codes.map(c => [returnsFor(data, c, opts), signalReturnsFor(data, c, opts), priceReturnsFor(data, c, opts)]);
+  const src = Object.fromEntries(codes.map((c, i) => [c, { r: rs[i][0], s: rs[i][1], q: rs[i][2] }]));
   const ok = [];
-  for (let i = 0; i < data.days.length; i++) if (rs.every(([r, s]) => !Number.isNaN(r[i]) && !Number.isNaN(s[i]))) ok.push(i);
+  for (let i = 0; i < data.days.length; i++) if (rs.every(([r, s, q]) => !Number.isNaN(r[i]) && !Number.isNaN(s[i]) && !Number.isNaN(q[i]))) ok.push(i);
   if (ok.length < 600) throw new Error('可抽樣的資料太少');
   const warm = Math.max(...['00631L', '00675L'].map(c => { const p = trendParamsFor(c, custom); return Math.max(p.maFast, p.maSlow); })) - 1;
   let span = 0;

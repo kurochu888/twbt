@@ -24,6 +24,7 @@ def write(d: Path, dates, series: dict):
     for c in ("0050", "00631L", "00675L"):
         pd.DataFrame({"ret": r(series[c]), "adj_close": 1.0, "is_synthetic": 0}, index=dates
                      ).rename_axis("date").to_csv(d / f"long/{c}_long.csv")
+        pd.DataFrame({"close": np.asarray(series[c], float)}, index=dates).rename_axis("date").to_csv(d / f"{c}.csv")
     (d / "long/params.json").write_text('{"gap_0050": 0, "c_00631L": 0, "c_00675L": 0, "dividend_yield": 0}')
 
 
@@ -81,9 +82,10 @@ class TestRebalance(unittest.TestCase):
         self.assertAlmostEqual(out["策略"].iloc[-1], 1_000_000 * 1.01 ** years)
         rb2 = self.rb(TaiwanCost())
         e = rb2.run(RebalConfig({"0050": 1.0}, "none", 0, 0.0), self.dates[0], self.dates[-1])["策略"]
-        invested = 1_000_000 / 1.001425                          # 買進金額含手續費 = 100 萬
-        self.assertAlmostEqual(e.iloc[0], invested)                 # 買進當天淨值 = 扣掉手續費後的市值
-        self.assertAlmostEqual(e.iloc[-1], invested - invested * (0.001425 + 0.001), places=4)
+        # 每股 1 元、一張 1,000 元：100 萬買 998 張（998,000 + 手續費 1,422），剩 578 元
+        self.assertAlmostEqual(e.iloc[0], 578 + 998_000)
+        # 期末賣 998,000：手續費＋證交稅 round(1,422.15 + 998) = 2,420
+        self.assertAlmostEqual(e.iloc[-1], 578 + 998_000 - 2_420)
 
     def test_zero_fee_and_min_trade(self):
         from twbt.backtest.rebalance import MIN_TRADE
@@ -135,22 +137,22 @@ class TestRebalanceTrend(unittest.TestCase):
         dates = pd.bdate_range("2021-01-04", periods=len(path))
         flat = np.ones(len(path))
         write(Path(tmp.name), dates, {"TAIEX": flat, "0050": flat, "00631L": path, "00675L": flat})
-        bh = BuyHold(tmp.name, cost=NO_COST, capital=1000)
+        bh = BuyHold(tmp.name, cost=NO_COST, capital=1_000_000)
         P = TrendParams(3, 5, 0.9, 1.0, 1.03, 0.15, 2)
         tb = TrendBacktest(bh, {c: P for c in bh.rets.columns})
         rb = RebalBacktest(bh, tb)
         cfg = RebalConfig({"00631L": 0.5, "CASH": 0.5}, "none", 0, 0.0, trend=True)
-        eq = rb.run(cfg, dates[0], dates[-1])["策略"]
+        out = rb.run(cfg, dates[0], dates[-1])
+        eq = out["策略"]
         self.assertEqual(eq.index[0], dates[4])                   # 均線算得出來才開始
-        # 第 5 天轉回續抱：正2 買到 50%（500）；第 8 天 10.5 出場
-        v8 = 500 / 11 * 10.5 + 500
-        self.assertAlmostEqual(eq[dates[8]], v8)
-        # 第 9 天接刀第 1 層：目標 = 50% × 1/2 = 25%
-        u = 0.25 * v8 / 8.5
-        self.assertAlmostEqual(eq[dates[9]], v8)
-        cash = v8 - 0.25 * v8
-        v10 = u * 7.0 + cash                                       # 第 10 天接第 2 層：調到 50%
-        self.assertAlmostEqual(eq[dates[10]], v10)
+        # 第 5 天轉回續抱：目標 50 萬、一張 11,000 → 45 張（495,000）；第 8 天 10.5 出場 → 505,000 + 472,500
+        self.assertAlmostEqual(eq[dates[8]], 977_500)
+        # 第 9 天接刀第 1 層：目標 25% × 977,500 = 244,375，一張 8,500 → 28.75 → 29 張
+        self.assertAlmostEqual(eq[dates[9]], 977_500)
+        # 第 10 天接第 2 層：總值 731,000 + 29,000 × 7 = 934,000，目標 50% = 467,000 → 66.7 → 67 張
+        self.assertAlmostEqual(eq[dates[10]], 934_000)
+        nt = out["同配置不搭配均線"]                                 # 不搭配均線：一直放 50%
+        self.assertAlmostEqual(nt.iloc[0], 1_000_000)
         tmp.cleanup()
 
 

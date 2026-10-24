@@ -18,10 +18,12 @@
 - "raw"（預設，跟 app 一樣）：只還原分割、不還原配息的價格。0050 除息那天均線看到的是下跌，跟 app 畫面一致
 - "adjusted"：還原權息的總報酬價格
   正2 不配息，兩種一樣。分割暫停交易的日子 app 的歷史裡沒有，這裡也不算進均線。
-損益一律用含息的總報酬（配息再投入）。
+整張交易（跟 app 一樣，一張 = 1000 股，用實際每股價格）：
+- 轉回續抱：剩下的現金買「夠買的最多張數」；接刀：用「出場現金 ÷ 層數」買最多張數；出場：全部賣出
+- 手續費、證交稅四捨五入到整數元
+- 配息發現金（0050）；續抱中除息那天現金夠買一張就再投入，接刀中留著下次加碼／轉回時用
 
 跟 app 的差別（刻意的）：
-- 股數可以有小數（回測價格是還原指數，不是實際股價；app 是整張 1000 股）
 - 回測區間可以從任何一天開始：訊號一律從資料第一天開始回放，區間第一天照當時的狀態建立部位
   （續抱 = 全部買進；接刀已加碼 k 層 = 買進 k ÷ 層數；觀望 = 全部現金），跟「當時照策略操作的人」一樣
 """
@@ -34,6 +36,7 @@ import pandas as pd
 
 from .costs import TaiwanCost
 from .data import KIND
+from .lots import LotAccount
 from .metrics import TRADING_DAYS
 
 WATCH, HOLD, WAIT = 0, 1, 2
@@ -108,35 +111,6 @@ def signals(close: np.ndarray, p: TrendParams) -> dict:
     return {"act": act, "status": status, "layers": layers}
 
 
-class _Account:
-    """一筆錢的帳戶：現金 + 單位數（可小數）。"""
-
-    def __init__(self, capital: float, cost: TaiwanCost, kind: str):
-        self.cash, self.units, self.cost, self.kind = capital, 0.0, cost, kind
-
-    def buy(self, amount: float, price: float):
-        amount = min(amount, self.cash)
-        if amount <= 0:
-            return
-        rate = self.cost.commission * self.cost.discount
-        fee = self.cost.buy_cost(amount / (1 + rate), self.kind)   # 先假設比例手續費
-        gross = amount - fee                                         # 最低 20 元時 fee 會比較大
-        if gross <= 0:
-            return
-        self.cash -= gross + fee
-        self.units += gross / price
-
-    def sell_all(self, price: float):
-        if self.units <= 0:
-            return
-        gross = self.units * price
-        self.cash += gross - self.cost.sell_cost(gross, self.kind)
-        self.units = 0.0
-
-    def value(self, price: float) -> float:
-        return self.cash + self.units * price
-
-
 @dataclass
 class TrendResult:
     equity: pd.Series
@@ -209,38 +183,42 @@ class TrendBacktest:
     def _simulate(self, asset, si, ei, keep_events=False):
         g, p = self._sig[asset], self.params[asset]
         o = g["i0"]
-        price, act, status, layers = g["price"], g["act"], g["status"], g["layers"]
-        acct = _Account(self.bh.capital, self.bh.cost, KIND[asset])
+        act, status, layers = g["act"], g["status"], g["layers"]
+        L, halt = self.bh.lots[asset], self.bh.halt[asset]
+        PX, LOT, DIV = L["px"], L["lot"], L["div"]
+        acct = LotAccount(self.bh.capital, self.bh.cost, KIND[asset])
         j0 = si - o
         st0, k0 = int(status[j0]), int(layers[j0])
         cash_at_exit = self.bh.capital
         if st0 == HOLD:
-            acct.buy(acct.cash, price[j0])
+            acct.buy_max(acct.cash, PX[si], LOT[si])
         elif st0 == WAIT and k0 > 0:
-            acct.buy(cash_at_exit * k0 / p.pyramid_levels, price[j0])
+            acct.buy_max(cash_at_exit * k0 / p.pyramid_levels, PX[si], LOT[si])
         eq = np.empty(ei - si + 1)
-        eq[0] = acct.value(price[j0])
+        eq[0] = acct.value(PX[si])
         events = []
         for t in range(si + 1, ei + 1):
             j = t - o
-            a, px = act[j], price[j]
+            a, px, lot = act[j], PX[t], LOT[t]
+            if DIV[t] != 0:
+                acct.cash += acct.shares * DIV[t]           # 配息發現金
             if a == RECOVER:
-                acct.buy(acct.cash, px)
+                acct.buy_max(acct.cash, px, lot)
             elif a == ADD:
-                acct.buy(cash_at_exit / p.pyramid_levels, px)
+                acct.buy_max(cash_at_exit / p.pyramid_levels, px, lot)
             elif a == EXIT:
                 acct.sell_all(px)
                 cash_at_exit = acct.cash
+            elif DIV[t] != 0 and status[j] == HOLD and not halt[t]:
+                acct.buy_max(acct.cash, px, lot)            # 續抱中：配息夠買一張就再投入
             if a and keep_events:
                 events.append({"日期": self.rets.index[t].date(), "動作": ACTION_NAME[int(a)]
                                + (f" 第 {int(layers[j])} 層" if a == ADD else ""),
-                               "價格指數": px, "淨值": acct.value(px)})
+                               "價格": px * lot / 1000, "持有張數": acct.shares / lot, "淨值": acct.value(px)})
             eq[t - si] = acct.value(px)
         # 期末賣出（扣成本），跟買進持有一樣
-        if acct.units > 0:
-            gross = acct.units * price[ei - o]
-            eq[-1] = acct.cash + gross - self.bh.cost.sell_cost(gross, KIND[asset])
-        ev = pd.DataFrame(events, columns=["日期", "動作", "價格指數", "淨值"]) if keep_events else None
+        eq[-1] = acct.final_value(PX[ei])
+        ev = pd.DataFrame(events, columns=["日期", "動作", "價格", "持有張數", "淨值"]) if keep_events else None
         return eq, ev, st0, k0
 
     # ---------- 多區間 ----------

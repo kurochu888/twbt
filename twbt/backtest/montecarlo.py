@@ -8,6 +8,7 @@
 
 每條路徑：前面 warmup 天讓均線累積（策略觀望、不計績效），之後 years 年比較策略與買進持有，
 兩者同一天開始、都扣手續費與證交稅（策略的每次進出、買進持有的期初買與期末賣）。
+整張交易：每條路徑從「現在的每股價格」（px0）出發，一張 1000 股、沒有分割；配息發現金（規則同 lots.py）。
 """
 from __future__ import annotations
 
@@ -15,7 +16,8 @@ import numpy as np
 import pandas as pd
 
 from .costs import TaiwanCost
-from .trend import ADD, EXIT, RECOVER, TrendParams, _Account, signals
+from .lots import LOT, LotAccount
+from .trend import ADD, EXIT, HOLD, RECOVER, TrendParams, signals
 
 TRADING_DAYS = 252
 
@@ -36,40 +38,62 @@ def bootstrap_indices(n_src: int, length: int, block: float, rng: np.random.Gene
     return out
 
 
+def path_prices(ret: np.ndarray, sig_ret: np.ndarray, px0: float) -> tuple:
+    """模擬路徑的每股價格與每股配息（第 0 天 = px0）。"""
+    n = len(ret) + 1
+    px, div = np.empty(n), np.zeros(n)
+    px[0] = px0
+    for j in range(1, n):
+        r, s = ret[j - 1], sig_ret[j - 1]
+        px[j] = px[j - 1] * (1 + s)
+        if r != s:
+            div[j] = px[j - 1] * (r - s) / (1 + r)
+    return px, div
+
+
 def _run_path(ret: np.ndarray, sig_ret: np.ndarray, p: TrendParams, warm: int,
-              capital: float, cost: TaiwanCost, kind: str) -> tuple:
-    price = np.concatenate([[1.0], np.cumprod(1 + ret)])
+              capital: float, cost: TaiwanCost, kind: str, px0: float = 100.0) -> tuple:
+    px, div = path_prices(ret, sig_ret, px0)
     spx = np.concatenate([[1.0], np.cumprod(1 + sig_ret)])
     sig = signals(spx, p)
-    act = sig["act"]
+    act, status = sig["act"], sig["status"]
     si = warm                                          # 均線剛算得出來那天（觀望、全部現金）
-    n = len(price)
-    acct = _Account(capital, cost, kind)
+    n = len(px)
+    acct = LotAccount(capital, cost, kind)
     cash_at_exit = capital
     eq = np.empty(n - si)
     eq[0] = capital
     trades = 0
     for t in range(si + 1, n):
-        a, px = act[t], price[t]
+        a = act[t]
+        if div[t] != 0:
+            acct.cash += acct.shares * div[t]
         if a == RECOVER:
-            acct.buy(acct.cash, px); trades += 1
+            acct.buy_max(acct.cash, px[t], LOT); trades += 1
         elif a == ADD:
-            acct.buy(cash_at_exit / p.pyramid_levels, px); trades += 1
+            acct.buy_max(cash_at_exit / p.pyramid_levels, px[t], LOT); trades += 1
         elif a == EXIT:
-            acct.sell_all(px); cash_at_exit = acct.cash; trades += 1
-        eq[t - si] = acct.value(px)
-    if acct.units > 0:
-        gross = acct.units * price[-1]
-        eq[-1] = acct.cash + gross - cost.sell_cost(gross, kind)
-    # 買進持有：同一天全部買進、最後一天賣出
-    inv = capital - cost.buy_cost(capital, kind)
-    bh = inv * price[si:] / price[si]
-    bh[-1] -= cost.sell_cost(bh[-1], kind)
+            acct.sell_all(px[t]); cash_at_exit = acct.cash; trades += 1
+        elif div[t] != 0 and status[t] == HOLD:
+            acct.buy_max(acct.cash, px[t], LOT)
+        eq[t - si] = acct.value(px[t])
+    eq[-1] = acct.final_value(px[-1])
+    # 買進持有：同一天買最多張數、配息夠一張就再投入、最後一天賣出
+    b = LotAccount(capital, cost, kind)
+    b.buy_max(b.cash, px[si], LOT)
+    bh = np.empty(n - si)
+    bh[0] = b.value(px[si])
+    for t in range(si + 1, n):
+        if div[t] != 0:
+            b.cash += b.shares * div[t]
+            b.buy_max(b.cash, px[t], LOT)
+        bh[t - si] = b.value(px[t])
+    bh[-1] = b.final_value(px[-1])
     return eq, bh, trades
 
 
-def _stats(eq: np.ndarray, years: float) -> tuple:
-    net = eq[-1] / eq[0]
+def _stats(eq: np.ndarray, years: float, capital: float) -> tuple:
+    net = eq[-1] / capital                               # 以投入金額為基準（期初買進的手續費也算進去，跟網頁版一樣）
     cagr = net ** (1 / years) - 1 if net > 0 else -1.0
     mdd = float((eq / np.maximum.accumulate(eq) - 1).min())
     return cagr, mdd
@@ -77,8 +101,8 @@ def _stats(eq: np.ndarray, years: float) -> tuple:
 
 def monte_carlo(ret: pd.Series, sig_ret: pd.Series, params: TrendParams, *, n: int = 2000, years: float = 10,
                 block: float = 60, seed: int = 0, capital: float = 1_000_000,
-                cost: TaiwanCost | None = None, kind: str = "etf") -> pd.DataFrame:
-    """回傳每條路徑一列：策略與買進持有的年化、回撤、進出次數。"""
+                cost: TaiwanCost | None = None, kind: str = "etf", px0: float = 100.0) -> pd.DataFrame:
+    """回傳每條路徑一列：策略與買進持有的年化、回撤、進出次數。px0 = 路徑起點的每股價格（建議用最新收盤）。"""
     cost = cost or TaiwanCost()
     from ..data.synthetic import year_frac
     r = ret.to_numpy(dtype=float)
@@ -93,10 +117,10 @@ def monte_carlo(ret: pd.Series, sig_ret: pd.Series, params: TrendParams, *, n: i
     rows = []
     for k in range(n):
         idx = bootstrap_indices(len(r), length, block, rng)
-        eq, bh, trades = _run_path(r[idx], s[idx], params, warm, capital, cost, kind)
+        eq, bh, trades = _run_path(r[idx], s[idx], params, warm, capital, cost, kind, px0)
         yrs = dt[idx[warm:]].sum()                      # 這條路徑實際經過的日曆時間
-        sc, sm = _stats(eq, yrs)
-        bc, bm = _stats(bh, yrs)
+        sc, sm = _stats(eq, yrs, capital)
+        bc, bm = _stats(bh, yrs, capital)
         rows.append((sc, sm, bc, bm, trades))
     return pd.DataFrame(rows, columns=["策略年化", "策略回撤", "持有年化", "持有回撤", "進出次數"])
 

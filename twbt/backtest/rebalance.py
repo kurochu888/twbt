@@ -10,6 +10,8 @@
   - freq = 'none'、band > 0：每天檢查
   - freq = 'none'、band = 0：永遠不調（等於買進後放著，對照組）
 - 調整：用當天收盤價，先賣超過目標的、再用現金買不足的；手續費 0.1425% × 折扣（最低 20 元）、賣出加證交稅 0.1%
+- 整張交易（一張 = 1000 股）：每一檔調到「最接近目標金額的張數」（四捨五入），買的時候現金不夠就少買；
+  配息發現金，下次再平衡時一起調
 
 搭配均線訊號（trend=True）：正2（00631L、00675L）的目標比例 = 配置比例 × 均線狀態
   （續抱 = 1、接刀已接 k 層 = k ÷ 層數、觀望或剛出場 = 0），不在正2 的部分放現金。
@@ -17,12 +19,14 @@
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
 
 from .data import KIND
+from .lots import LotAccount
 from .metrics import TRADING_DAYS, summarize
 from .trend import HOLD, WAIT, TrendBacktest
 
@@ -30,7 +34,6 @@ ASSETS = ["0050", "00631L", "00675L"]
 LEVERAGED = {"00631L", "00675L"}
 EXPOSURE = {"0050": 1.0, "00631L": 2.0, "00675L": 2.0, "CASH": 0.0}
 FREQ_NAME = {"none": "不定期", "M": "每月", "Q": "每季", "H": "每半年", "Y": "每年"}
-DUST = 0.01           # 不到 1 分錢的「交易」是浮點誤差留下的零頭，不算（免手續費時會多算交易次數）
 MIN_TRADE = 1000      # 再平衡時單筆不到 1,000 元就不交易（不然最低手續費 20 元會吃掉小額調整，現實中也沒人這樣做）
 
 
@@ -70,12 +73,10 @@ class RebalBacktest:
         self.bh, self.rets, self.syn = bh, bh.rets, bh.syn
         self.tb = tb or TrendBacktest(bh)
         self.idx = self.rets.index
-        self.R = {c: self.rets[c].to_numpy() for c in ASSETS}
         from ..data.synthetic import year_frac
-        from .data import load_signal_inputs
         self.dt = year_frac(self.idx).to_numpy()          # 現金利息照日曆時間算
-        traded = load_signal_inputs(bh.data_dir, self.rets, self.syn, bh.tw50_excess)[1]
-        self.halt = {c: ~traded[c].to_numpy() for c in ASSETS}   # 暫停交易（分割）的日子不能買賣
+        self.halt = bh.halt                               # 暫停交易（分割）的日子不能買賣
+        self.lots = bh.lots
 
     # 某天正2 的均線狀態 → 比例（續抱 1、接刀 k/層數、其他 0）
     def _trend_frac(self, code: str, t: int) -> float:
@@ -104,11 +105,14 @@ class RebalBacktest:
         w = cfg.norm()
         codes = [c for c in w if c != "CASH"]
         cost, capital = self.bh.cost, self.bh.capital
-        rate = cost.commission * cost.discount
-        h = {c: 0.0 for c in codes}
+        acct = {c: LotAccount(0.0, cost, KIND[c]) for c in codes}   # 每一檔的股數（現金統一放 cash）
+        PX = {c: self.lots[c]["px"] for c in codes}
+        LOT = {c: self.lots[c]["lot"] for c in codes}
+        DIV = {c: self.lots[c]["div"] for c in codes}
         cash = capital
         trades = 0
         log = []
+        cur_t = si
 
         def target(t):
             tw = {}
@@ -118,48 +122,55 @@ class RebalBacktest:
             tw["CASH"] = 1 - sum(tw.values())
             return tw
 
-        def sell(c, amt, small_ok):
-            nonlocal cash, trades
-            if amt < DUST or (amt < MIN_TRADE and not small_ok):
-                return
-            cash += amt - cost.sell_cost(amt, KIND[c])
-            h[c] -= amt
-            trades += 1
+        def hold(c):
+            return acct[c].shares * PX[c][cur_t]
 
-        def buy(c, amt, small_ok):
-            nonlocal cash, trades
-            amt = min(amt, cash)
-            if amt < DUST or (amt < MIN_TRADE and not small_ok):
-                return
-            fee = cost.buy_cost(amt / (1 + rate), KIND[c])
-            gross = amt - fee
-            if gross <= 0:
-                return
-            cash -= amt
-            h[c] += gross
-            trades += 1
+        def total():
+            return cash + sum(hold(c) for c in codes)
 
         def trade_to(tw, only=None, small_ok=False):
             # small_ok：期初建立部位、均線訊號的進出不受 MIN_TRADE 限制；目標 0（出場）一定全部賣掉
-            V = cash + sum(h.values())
+            nonlocal cash, trades
+            V = total()
             sel = [only] if only else [c for c in codes if small_ok or not self.halt[c][cur_t]]
+            want = {}
             for c in sel:
-                if h[c] > tw[c] * V:
-                    sell(c, h[c] - tw[c] * V, small_ok or tw[c] == 0)
-            for c in sel:
-                if h[c] < tw[c] * V:
-                    buy(c, tw[c] * V - h[c], small_ok)
+                pl = PX[c][cur_t] * LOT[c][cur_t]
+                want[c] = 0 if tw[c] == 0 else int(math.floor(tw[c] * V / pl + 0.5))   # 最接近目標的張數
+            for c in sel:                                   # 先賣
+                a, lot = acct[c], LOT[c][cur_t]
+                have = int(round(a.shares / lot))
+                if have > want[c]:
+                    g = (have - want[c]) * lot * PX[c][cur_t]
+                    if g < MIN_TRADE and not (small_ok or tw[c] == 0):
+                        continue
+                    a.cash = 0.0
+                    a.sell_shares(a.shares if want[c] == 0 else (have - want[c]) * lot, PX[c][cur_t])
+                    cash += a.cash
+                    trades += 1
+            for c in sel:                                   # 再用現金買
+                a, lot = acct[c], LOT[c][cur_t]
+                have = int(round(a.shares / lot))
+                if have < want[c]:
+                    pl = PX[c][cur_t] * lot
+                    a.cash = cash
+                    n = min(want[c] - have, a.max_lots(cash, pl))
+                    if n <= 0 or (n * pl < MIN_TRADE and not small_ok):
+                        continue
+                    a.buy_lots(n, PX[c][cur_t], lot)
+                    cash = a.cash
+                    trades += 1
 
-        cur_t = si
         trade_to(target(si), small_ok=True)
         eq = np.empty(ei - si + 1)
-        eq[0] = cash + sum(h.values())
+        eq[0] = total()
         last_key = _period_key(self.idx[si], cfg.freq)
         for t in range(si + 1, ei + 1):
             cur_t = t
-            for c in codes:
-                h[c] *= 1 + self.R[c][t]
             cash *= (1 + cfg.cash_rate) ** self.dt[t]
+            for c in codes:
+                if DIV[c][t] != 0:
+                    cash += acct[c].shares * DIV[c][t]      # 配息發現金
             tw = target(t)
             # 均線有動作的正2：只調那一檔
             if cfg.trend:
@@ -175,17 +186,17 @@ class RebalBacktest:
             check = (cfg.freq == "none" and cfg.band > 0) or (key is not None and key != last_key)
             last_key = key
             if check:
-                V = cash + sum(h.values())
-                dev = max([abs(h[c] / V - tw[c]) for c in codes] + [abs(cash / V - tw["CASH"])])   # 全部現金時 codes 是空的
+                V = total()
+                dev = max([abs(hold(c) / V - tw[c]) for c in codes] + [abs(cash / V - tw["CASH"])])   # 全部現金時 codes 是空的
                 if cfg.band <= 0 or dev > cfg.band + 1e-12:
                     n0 = trades
                     trade_to(tw)
                     if keep_trades and trades > n0:               # 真的有成交才記
                         log.append((self.idx[t], "再平衡"))
-            eq[t - si] = cash + sum(h.values())
+            eq[t - si] = total()
         for c in codes:                                   # 期末全部賣出（扣成本）
-            if h[c] > 0:
-                eq[-1] -= cost.sell_cost(h[c], KIND[c])
+            if acct[c].shares > 0:
+                eq[-1] -= cost.sell_cost(hold(c), KIND[c])
         return eq, trades, log
 
     # ---------- 對外 ----------

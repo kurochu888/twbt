@@ -29,6 +29,16 @@ def _encode(s: pd.Series) -> list:
     return [None if np.isnan(x) else int(round(x * SCALE)) for x in v]
 
 
+def _splits(code: str, idx: pd.DatetimeIndex) -> list:
+    from .data.adjust import load_splits
+    out = []
+    for _, x in load_splits().query("code == @code").iterrows():
+        rd = pd.Timestamp(x["resume_date"])
+        if rd <= idx[-1]:
+            out.append([int(np.searchsorted(idx.values, np.datetime64(rd))), float(x["ratio"])])
+    return out
+
+
 def export_web(adjusted_dir: Path, out_dir: Path) -> str:
     out_dir.mkdir(parents=True, exist_ok=True)
     r, syn = load_returns(adjusted_dir, use_synthetic=True, tw50_excess=True)
@@ -56,6 +66,11 @@ def export_web(adjusted_dir: Path, out_dir: Path) -> str:
         # 序列開始之後、沒有交易的日子（分割暫停交易），均線不算這幾天
         halt = np.flatnonzero(~traded[code].to_numpy())
         a["halt"] = [int(i) for i in halt if i > first]
+        # 整張交易：最新一天的實際收盤（每股價格從這裡往回推）、分割（恢復交易那天的位置、倍數）
+        if code != "TAIEX":
+            raw = adjusted_dir / f"{code}.csv"
+            a["px_last"] = float(pd.read_csv(raw, usecols=["close"])["close"].iloc[-1]) if raw.exists() else 1.0
+            a["splits"] = _splits(code, idx)
         assets[code] = a
     cal = adjusted_dir / "long" / "calibration.txt"
     data = {

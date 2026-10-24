@@ -40,7 +40,8 @@ def main():
             src = f"{r.index[0].date()}～{r.index[-1].date()}" + ("（含模擬）" if syn_on else "（只用真實）")
             p = TrendParams.default(LEVERAGE[code])
             for block, label in BLOCKS.items():
-                df = monte_carlo(r, sig[code], p, n=a.n, years=a.years, block=block, seed=a.seed + block)
+                df = monte_carlo(r, sig[code], p, n=a.n, years=a.years, block=block, seed=a.seed + block,
+                                 px0=float(bh.lots[code]["px"][-1]))   # 從現在的每股價格出發（整張交易）
                 df.to_csv(out / f"{code}_{'syn' if syn_on else 'real'}_b{block}.csv", index=False)
                 s = summarize_mc(df, a.years)
                 rows.append({"標的": NAMES[code], "取樣來源": src, "區塊長度": f"{block} 天（{label}）", **s})

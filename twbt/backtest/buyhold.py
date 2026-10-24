@@ -1,10 +1,11 @@
 """買進持有回測：自訂區間、固定長度滾動、隨機區間。
 
-規則：
-- 起始日（含）之後第一個交易日，以收盤價全額買進（扣買進手續費）
-- 期間配息自動再投入（用總報酬計算）
+規則（整張交易，一張 = 1000 股）：
+- 起始日（含）之後第一個交易日，以收盤價買進「錢夠買的最多張數」，剩下的放現金（不計息）
+- 配息發現金；除息那天現金夠買一張就買進（配息再投入）
 - 結束日（含）之前最後一個交易日，以收盤價全部賣出（扣手續費與證交稅）
-- 大盤（TAIEX）是比較基準，不扣任何成本
+- 手續費、證交稅四捨五入到整數元
+- 大盤（TAIEX）是比較基準，不能交易：不扣成本、不分張數
 """
 from __future__ import annotations
 
@@ -14,7 +15,8 @@ import numpy as np
 import pandas as pd
 
 from .costs import TaiwanCost
-from .data import KIND, NAMES, load_returns
+from .data import KIND, NAMES, load_returns, load_signal_inputs
+from .lots import LotAccount, load_lot_inputs
 from .metrics import TRADING_DAYS, summarize
 
 
@@ -28,6 +30,9 @@ class BuyHold:
         self.cost = cost or TaiwanCost()
         self.rf = rf
         self.use_synthetic = use_synthetic
+        self.price_ret, traded = load_signal_inputs(data_dir, self.rets, self.syn, tw50_excess)
+        self.halt = {c: ~traded[c].to_numpy() for c in self.rets.columns}
+        self.lots = load_lot_inputs(data_dir, self.rets, self.price_ret)
 
     # ---------- 單一區間 ----------
     def _bounds(self, start, end) -> tuple[pd.Timestamp, pd.Timestamp]:
@@ -47,13 +52,30 @@ class BuyHold:
             raise ValueError(f"{asset} 在 {s.date()} ~ {e.date()} 有缺資料"
                              f"（真實資料從 {first.date() if first is not None else '－'} 起）；"
                              f"可改用 use_synthetic=True 或調整區間")
-        kind = KIND[asset]
-        invested = self.capital - self.cost.buy_cost(self.capital, kind)
-        growth = (1 + r.iloc[1:]).cumprod()
-        eq = pd.concat([pd.Series([invested], index=[s]), invested * growth])
-        final = eq.iloc[-1]
-        eq.iloc[-1] = final - self.cost.sell_cost(final, kind)
-        return eq
+        si, ei = self.rets.index.get_loc(s), self.rets.index.get_loc(e)
+        eq, _ = self._path(asset, si, ei)
+        return pd.Series(eq, index=self.rets.index[si:ei + 1])
+
+    def _path(self, asset: str, si: int, ei: int):
+        """每日淨值（期末已扣賣出成本）與期初買了幾張。大盤不能交易：照指數算、不扣成本。"""
+        if asset not in self.lots:
+            r = self.rets[asset].to_numpy()[si + 1:ei + 1]
+            return self.capital * np.concatenate([[1.0], np.cumprod(1 + r)]), None
+        L, halt = self.lots[asset], self.halt[asset]
+        px, lot, div = L["px"], L["lot"], L["div"]
+        acct = LotAccount(self.capital, self.cost, KIND[asset])
+        acct.buy_max(acct.cash, px[si], lot[si])
+        lots0 = acct.shares / lot[si]
+        eq = np.empty(ei - si + 1)
+        eq[0] = acct.value(px[si])
+        for t in range(si + 1, ei + 1):
+            if div[t] != 0:
+                acct.cash += acct.shares * div[t]           # 配息發現金
+                if not halt[t]:
+                    acct.buy_max(acct.cash, px[t], lot[t])  # 夠買一張就再投入
+            eq[t - si] = acct.value(px[t])
+        eq[-1] = acct.final_value(px[ei])
+        return eq, lots0
 
     def period(self, start, end, assets=None) -> tuple[pd.DataFrame, pd.DataFrame]:
         """自訂區間。回傳 (指標表, 各標的淨值曲線)。"""
@@ -67,6 +89,9 @@ class BuyHold:
                 continue
             st = summarize(eq, self.rf)
             st["期末金額"] = eq.iloc[-1]
+            if a in self.lots:
+                si = self.rets.index.get_loc(eq.index[0])
+                st["期初張數"] = int(round(self._path(a, si, si + 1)[1]))
             s, e = eq.index[0], eq.index[-1]
             st["模擬資料占比"] = self.syn.loc[s:e, a].mean()
             stats[NAMES[a]] = st
@@ -78,14 +103,12 @@ class BuyHold:
         r = self.rets[asset].loc[s:e].iloc[1:].to_numpy()
         if len(r) < 20 or np.isnan(r).any():
             return None
-        kind = KIND[asset]
-        inv = 1 - self.cost.buy_cost(self.capital, kind) / self.capital
-        eq = inv * np.cumprod(1 + r)
-        final = eq[-1] * self.capital
-        final_net = (final - self.cost.sell_cost(final, kind)) / self.capital
+        si, ei = self.rets.index.get_loc(s), self.rets.index.get_loc(e)
+        path = self._path(asset, si, ei)[0]
+        final_net = path[-1] / self.capital
         years = (e - s).days / 365.25
-        path = np.concatenate([[inv], eq])
         mdd = float((path / np.maximum.accumulate(path) - 1).min())
+        r = path[1:] / path[:-1] - 1
         return {
             "起始日": s.date(), "結束日": e.date(), "年數": years,
             "總報酬": final_net - 1,

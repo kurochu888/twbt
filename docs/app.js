@@ -554,6 +554,8 @@ function renderPeriod(res) {
   if (skipped.length) html += `<div class="warn">這段期間缺資料，已略過：${skipped.join('、')}</div>`;
   if (!res.results.length) { $('results').innerHTML = html; return; }
 
+  const poor = res.results.filter(r => r.stats.lots0 === 0);
+  if (poor.length) html += `<div class="warn">整張交易（一張 1000 股）：投入金額買不起一張 ${poor.map(r => `${SHORT[r.code]}（${money(r.stats.lotPrice)}）`).join('、')}，那幾檔整段都是現金。</div>`;
   html += `<div class="cards">${res.results.map(r => {
     const s = r.stats;
     return `<article class="acard" style="--c:${color(r.code)}">
@@ -564,6 +566,7 @@ function renderPeriod(res) {
         <dt>總報酬</dt><dd class="${cls(s.total)}">${pct(s.total, 1, true)}</dd>
         <dt>最大回撤</dt><dd class="neg">${pct(s.mdd)}</dd>
         <dt>期末金額</dt><dd>${money(s.final)}</dd>
+        ${s.lots0 != null ? `<dt>期初買進</dt><dd>${s.lots0 > 0 ? `${s.lots0.toLocaleString()} 張` : '<span class="neg">錢不夠買一張</span>'}<br><small style="color:var(--muted)">一張 ${money(s.lotPrice)}</small></dd>` : ''}
       </dl>
       <details class="more"><summary>更多指標</summary>
         <dl class="kv">
@@ -783,9 +786,9 @@ function renderTrendPeriod(res) {
 
   // 進出紀錄
   const base = r.equity[0];
-  const evRows = r.events.map(e => `<tr><td class="num">${e.date}</td><td>${ACT_LABEL[e.act]}${e.act === 2 ? ` 第 ${e.layer} 層` : ''}</td><td class="n">${(e.value / base).toFixed(2)}×</td></tr>`).join('');
+  const evRows = r.events.map(e => `<tr><td class="num">${e.date}</td><td>${ACT_LABEL[e.act]}${e.act === 2 ? ` 第 ${e.layer} 層` : ''}</td><td class="n">${e.price.toFixed(2)}</td><td class="n">${Math.round(e.lots).toLocaleString()}</td><td class="n">${(e.value / base).toFixed(2)}×</td></tr>`).join('');
   html += `<section class="card"><details ${r.events.length <= 12 ? 'open' : ''}><summary><b>${SHORT[r.code]} 進出紀錄（${r.events.length} 次）</b></summary>
-    ${r.events.length ? `<div class="tbl-wrap"><table class="ev"><thead><tr><th>日期</th><th style="text-align:left">動作</th><th>當時淨值</th></tr></thead><tbody>${evRows}</tbody></table></div>`
+    ${r.events.length ? `<div class="tbl-wrap"><table class="ev"><thead><tr><th>日期</th><th style="text-align:left">動作</th><th>收盤價</th><th>持有張數</th><th>當時淨值</th></tr></thead><tbody>${evRows}</tbody></table></div>`
       : '<p class="hint">這段期間沒有任何進出。</p>'}
     <p class="hint">參數：快線 ${r.params.maFast}、慢線 ${r.params.maSlow}、出場乘數 ${r.params.exitBuffer}、接刀間距 ${r.params.pyramidGap}、${r.params.pyramidLevels} 層、轉回斜率 ${r.params.recoverSlope}、強反彈 ${r.params.recoverStrong}</p>
   </details></section>`;
