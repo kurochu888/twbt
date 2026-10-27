@@ -11,7 +11,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=c401bac538">
+<link rel="stylesheet" href="style.css?v=45f5734396">
 </head>
 <body>
 <button class="update-banner" id="updateBanner" type="button" hidden>🔄 有新版本，點這裡更新</button>
@@ -265,6 +265,7 @@
         <dt>總報酬</dt><dd>期末 ÷ 投入金額 − 1，已扣所有交易成本，含配息（零頭與配息現金也算在內）。</dd>
         <dt>年化報酬</dt><dd>換算成平均每年幾 %（複利），不同長度的區間可以互相比較。</dd>
         <dt>最大回撤（MDD）</dt><dd>從前一個最高點跌到最低點最多跌幾 %。−50% 代表曾經賠掉一半。下面會寫高點、低點是哪天，以及哪天「回到前高」（「尚未」= 到期末都還沒漲回來）。</dd>
+        <dt>最長套牢</dt><dd>從前一個最高點跌下去、到淨值漲回前高，花最久的那一次（日曆時間）。不一定是最大回撤那次：跌得淺但爬得慢，可能套更久。「+」= 到期末還沒回到前高，實際只會更長。「更多指標」裡有最大回撤那次跌了多久、花多久回到前高。</dd>
         <dt>年化波動</dt><dd>每日漲跌幅的標準差換算成一年，越大代表淨值上下晃得越厲害。</dd>
         <dt>夏普</dt><dd>年化報酬 ÷ 年化波動（不扣無風險利率）。每承受一單位波動換到多少報酬，越高越好；大於 0.5 算不錯。</dd>
         <dt>索提諾</dt><dd>跟夏普類似，但只把「下跌」的波動當風險。</dd>
@@ -314,6 +315,6 @@
   </section>
 </main>
 
-<script type="module" src="app.js?v=c401bac538"></script>
+<script type="module" src="app.js?v=45f5734396"></script>
 </body>
 </html>

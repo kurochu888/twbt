@@ -47,27 +47,28 @@ for c in cases:
             for code in ("TAIEX", "0050", "00631L", "00675L"):
                 try:
                     eq = bh.equity(code, c["start"], c["end"]); st = summarize(eq)
-                    res[code] = [str(eq.index[0].date()), float(eq.iloc[-1]), st["最大回撤"]]
+                    res[code] = [str(eq.index[0].date()), float(eq.iloc[-1]), st["最大回撤"], st["最長套牢"], str(st["回撤高點"]), str(st["回到前高"])]
                 except ValueError: res[code] = None
             r["period"] = res
-            if c["roll"]: w = bh.rolling(c["roll"]); r["roll"] = {k: [len(v), float(v["年化報酬"].median())] for k, v in w.groupby("標的")} if len(w) else {}
+            if c["roll"]: w = bh.rolling(c["roll"]); r["roll"] = {k: [len(v), float(v["年化報酬"].median()), float(v["最長套牢"].median()), int(v["套牢未結束"].sum())] for k, v in w.groupby("標的")} if len(w) else {}
         elif c["type"] == "trend":
             tb = TrendBacktest(bh, params, signal_price=c["sp"]); res = {}
             for code in ("0050", "00631L", "00675L"):
                 try:
                     x = tb.run(code, c["start"], c["end"]); st = summarize(x.equity)
-                    res[code] = [str(x.equity.index[0].date()), float(x.equity.iloc[-1]), st["最大回撤"], len(x.events)]
+                    res[code] = [str(x.equity.index[0].date()), float(x.equity.iloc[-1]), st["最大回撤"], len(x.events), st["最長套牢"]]
                 except ValueError: res[code] = None
             r["period"] = res
-            if c["roll"]: w = tb.rolling(c["roll"]); r["roll"] = {k: [len(v), float(v["策略年化"].median())] for k, v in w.groupby("標的")} if len(w) else {}
+            if c["roll"]: w = tb.rolling(c["roll"]); r["roll"] = {k: [len(v), float(v["策略年化"].median()), float(v["策略最長套牢"].median()), float(v["持有最長套牢"].median())] for k, v in w.groupby("標的")} if len(w) else {}
         else:
             tb = TrendBacktest(bh, params, signal_price=c["sp"]); rb = RebalBacktest(bh, tb)
             cfg = RebalConfig(c["weights"], c["freq"], c["band"], c["cash"], c["rtrend"])
             try:
                 x = rb.run(cfg, c["start"], c["end"]); st = summarize(x["策略"])
-                r["period"] = [str(x["策略"].index[0].date()), float(x["策略"].iloc[-1]), st["最大回撤"], x["交易次數"], float(x["同配置不再平衡"].iloc[-1])]
+                r["period"] = [str(x["策略"].index[0].date()), float(x["策略"].iloc[-1]), st["最大回撤"], x["交易次數"], float(x["同配置不再平衡"].iloc[-1]), st["最長套牢"]]
             except ValueError: r["period"] = None
-            if c["roll"]: w = rb.rolling(cfg, c["roll"]); r["roll"] = [len(w), float(w["策略年化"].median()) if len(w) else None]
+            if c["roll"]: w = rb.rolling(cfg, c["roll"]); r["roll"] = [len(w), float(w["策略年化"].median()) if len(w) else None,
+                                      float(w["策略最長套牢"].median()) if len(w) else None, float(w["不再平衡最長套牢"].median()) if len(w) else None]
     except Exception as e:
         r["error"] = f"{type(e).__name__}: {e}"
     out.append(r)

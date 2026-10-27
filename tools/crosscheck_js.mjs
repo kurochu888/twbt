@@ -18,33 +18,37 @@ for (const x of ref) {
         const py = x.period[code], js = r.results?.find(y => y.code === code);
         if (!py !== !js) { bad.push(['bh 有無不同', code, c, py, !!js]); continue; }
         if (!py) continue;
-        if (js.stats.start !== py[0] || !close(js.stats.final, py[1]) || !close(js.stats.mdd, py[2])) bad.push(['bh', code, c.start, c.end, js.stats.start, py[0], js.stats.final, py[1]]);
+        if (js.stats.start !== py[0] || !close(js.stats.final, py[1]) || !close(js.stats.mdd, py[2]) || !close(js.stats.uw, py[3])
+          || js.stats.mddTop !== py[4] || (js.stats.mddRecovery ?? '尚未') !== py[5]) bad.push(['bh', code, c.start, c.end, js.stats.start, py[0], js.stats.final, py[1], js.stats.uw, py[3], js.stats.mddTop, py[4], js.stats.mddRecovery, py[5]]);
       }
       if (c.roll) { const rows = E.rolling(data, ['TAIEX', '0050', '00631L', '00675L'], c.roll, opts);
         for (const [code, nm] of Object.entries(NAMES)) { const g = rows.filter(r => r.code === code), py = x.roll[nm];
-          if ((g.length || 0) !== (py ? py[0] : 0) || (py && !close(q50(g.map(r => r.cagr)), py[1]))) bad.push(['bh roll', code, g.length, py]); } }
+          if ((g.length || 0) !== (py ? py[0] : 0) || (py && (!close(q50(g.map(r => r.cagr)), py[1]) || !close(q50(g.map(r => r.uw)), py[2])
+            || g.filter(r => r.uwOpen).length !== py[3]))) bad.push(['bh roll', code, g.length, py]); } }
     } else if (c.type === 'trend') {
       const r = E.trendPeriod(data, ['0050', '00631L', '00675L'], c.start, c.end, opts, custom);
       for (const code of ['0050', '00631L', '00675L']) {
         const py = x.period[code], js = r.results?.find(y => y.code === code);
         if (!py !== !js) { bad.push(['trend 有無不同', code, c.start, c.end, c.custom, py, js ? js.stats.start : r.error]); continue; }
         if (!py) continue;
-        if (js.stats.start !== py[0] || !close(js.stats.final, py[1]) || !close(js.stats.mdd, py[2]) || js.events.length !== py[3]) bad.push(['trend', code, c.start, c.end, js.stats.start, py[0], js.stats.final, py[1], js.events.length, py[3]]);
+        if (js.stats.start !== py[0] || !close(js.stats.final, py[1]) || !close(js.stats.mdd, py[2]) || js.events.length !== py[3] || !close(js.stats.uw, py[4])) bad.push(['trend', code, c.start, c.end, js.stats.start, py[0], js.stats.final, py[1], js.events.length, py[3], js.stats.uw, py[4]]);
       }
       if (c.roll) { const rows = E.trendWindows(data, ['0050', '00631L', '00675L'], E.rollingWins(data, c.roll), opts, custom);
         for (const code of ['0050', '00631L', '00675L']) { const g = rows.filter(r => r.code === code), py = x.roll[NAMES[code]];
-          if ((g.length || 0) !== (py ? py[0] : 0) || (py && !close(q50(g.map(r => r.cagr)), py[1]))) bad.push(['trend roll', code, c.roll, g.length, py]); } }
+          if ((g.length || 0) !== (py ? py[0] : 0) || (py && (!close(q50(g.map(r => r.cagr)), py[1]) || !close(q50(g.map(r => r.uw)), py[2])
+            || !close(q50(g.map(r => r.bhUw)), py[3])))) bad.push(['trend roll', code, c.roll, g.length, py]); } }
     } else {
       const cfg = { weights: c.weights, freq: c.freq, band: c.band, cashRate: c.cash, trend: c.rtrend };
       const r = E.rebalPeriod(data, cfg, c.start, c.end, opts, custom);
       const py = x.period;
       if (!py !== !!r.error) bad.push(['rebal 有無不同', c.start, c.end, py, r.error]);
       else if (py) {
-        const js = [E.dayToIso(r.dayIdx[0]), r.main.eq[r.main.eq.length - 1], r.stats.mdd, r.main.trades, r.flat.eq[r.flat.eq.length - 1]];
-        if (js[0] !== py[0] || !close(js[1], py[1]) || !close(js[2], py[2]) || js[3] !== py[3] || !close(js[4], py[4])) bad.push(['rebal', JSON.stringify(cfg), c.start, js, py]);
+        const js = [E.dayToIso(r.dayIdx[0]), r.main.eq[r.main.eq.length - 1], r.stats.mdd, r.main.trades, r.flat.eq[r.flat.eq.length - 1], r.stats.uw];
+        if (js[0] !== py[0] || !close(js[1], py[1]) || !close(js[2], py[2]) || js[3] !== py[3] || !close(js[4], py[4]) || !close(js[5], py[5])) bad.push(['rebal', JSON.stringify(cfg), c.start, js, py]);
       }
       if (c.roll) { const rows = E.rebalWindows(data, cfg, E.rollingWins(data, c.roll), opts, custom);
-        if (rows.length !== x.roll[0] || (rows.length && !close(q50(rows.map(r => r.cagr)), x.roll[1]))) bad.push(['rebal roll', rows.length, x.roll]); }
+        if (rows.length !== x.roll[0] || (rows.length && (!close(q50(rows.map(r => r.cagr)), x.roll[1]) || !close(q50(rows.map(r => r.uw)), x.roll[2])
+          || !close(q50(rows.map(r => r.flatUw)), x.roll[3])))) bad.push(['rebal roll', rows.length, x.roll]); }
     }
   } catch (e) { bad.push(['js 例外', c.type, e.message, c]); }
 }

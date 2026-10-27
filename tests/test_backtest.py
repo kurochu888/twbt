@@ -137,6 +137,41 @@ class TestMetrics(unittest.TestCase):
         s = summarize(eq)
         self.assertAlmostEqual(s["總報酬"], 0.10)
 
+    def test_underwater(self):
+        from twbt.backtest.metrics import underwater, uw_stats
+        idx = pd.to_datetime(["2020-01-01", "2020-01-02", "2020-03-01", "2020-04-01", "2021-01-01",
+                              "2021-02-01", "2022-06-01", "2023-01-01", "2023-06-01"])
+        # 第一次：100 → 50 → 回到 100（深但短）；第二次：120 → 90 → 期末 110 還沒回到前高（淺但長）
+        eq = pd.Series([100, 100, 50, 100, 120, 90, 100, 110, 110.0], index=idx)
+        u = underwater(eq)
+        self.assertAlmostEqual(u["mdd"], -0.5)
+        # 高點 = 開始下跌前最後一天在最高點的那天（1/2，不是 1/1）；回到 ≥ 前高就算回復
+        self.assertEqual((u["top"], u["trough"], u["recovery"]), (idx[1], idx[2], idx[3]))
+        lg = u["longest"]
+        self.assertEqual((lg["top"], lg["trough"], lg["recovery"]), (idx[4], idx[5], None))
+        self.assertAlmostEqual(lg["years"], (idx[-1] - idx[4]).days / 365.25)
+        self.assertAlmostEqual(lg["depth"], 90 / 120 - 1)
+        s = summarize(eq)
+        self.assertAlmostEqual(s["下跌期"], (idx[2] - idx[1]).days / 365.25)
+        self.assertAlmostEqual(s["回復期"], (idx[3] - idx[2]).days / 365.25)
+        self.assertTrue(s["套牢未結束"])
+        self.assertEqual(uw_stats(eq.to_numpy(), idx), {"最長套牢": lg["years"], "套牢未結束": True})
+        # 從沒跌過：最長套牢 0
+        up = pd.Series([1.0, 2, 3], index=idx[:3])
+        self.assertIsNone(underwater(up)["longest"])
+        self.assertEqual(summarize(up)["最長套牢"], 0.0)
+
+    def test_window_underwater(self):
+        with tempfile.TemporaryDirectory() as d:
+            make_data(Path(d))
+            bh = BuyHold(d, cost=NO_COST)
+            roll = bh.rolling(2)
+            self.assertIn("最長套牢", roll)
+            self.assertTrue((roll["最長套牢"] >= 0).all() and (roll["最長套牢"] <= roll["年數"] + 1e-9).all())
+            out = describe(roll, "最長套牢")
+            self.assertIn("期末還在套牢", out.index)
+            self.assertIn("最長", out.index)
+
 
 if __name__ == "__main__":
     unittest.main()

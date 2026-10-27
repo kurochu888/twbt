@@ -185,16 +185,32 @@ function std(a) {                          // 樣本標準差（ddof=1），同 
   return Math.sqrt(s / (a.length - 1));
 }
 
-export function maxDrawdown(eq) {          // 回傳 {mdd, top, trough, recovery}（都是陣列位置）
-  let peak = -Infinity, peakAt = 0, mdd = 0, trough = 0, top = 0;
-  for (let i = 0; i < eq.length; i++) {
-    if (eq[i] > peak) { peak = eq[i]; peakAt = i; }
-    const dd = eq[i] / peak - 1;
-    if (dd < mdd) { mdd = dd; trough = i; top = peakAt; }
+// 回撤與套牢期（水下期），同 metrics.py 的 underwater()：
+// 套牢 = 從前高（跌之前最後一天在最高點）到淨值回到 ≥ 前高的那天；期末還沒回到前高就算到期末（recovery = null）
+// 回傳 {mdd, top, trough, recovery, longest}（都是陣列位置）；longest = 最長的一次 {depth, top, trough, recovery, years}，一樣長取最早那次
+export function underwater(eq, dayIdx) {
+  const n = eq.length, eps = [];
+  let peakAt = 0, lowAt = 0, under = false;
+  for (let i = 1; i < n; i++) {
+    if (eq[i] >= eq[peakAt]) {
+      if (under) { eps.push([peakAt, lowAt, i]); under = false; }
+      peakAt = i;                            // 一樣高也往後移：高點 = 開始下跌前的最後一天
+    } else if (!under || eq[i] < eq[lowAt]) { lowAt = i; under = true; }
   }
-  let recovery = null;
-  for (let i = trough; i < eq.length; i++) if (eq[i] >= eq[top]) { recovery = i; break; }
-  return { mdd, top, trough, recovery };
+  if (under) eps.push([peakAt, lowAt, null]);
+  const out = { mdd: 0, top: 0, trough: 0, recovery: 0, longest: null };
+  for (const [t, lo, r] of eps) {
+    const depth = eq[lo] / eq[t] - 1;
+    if (depth < out.mdd) Object.assign(out, { mdd: depth, top: t, trough: lo, recovery: r });
+    const years = (dayIdx[r ?? n - 1] - dayIdx[t]) / 365.25;
+    if (!out.longest || years > out.longest.years) out.longest = { depth, top: t, trough: lo, recovery: r, years };
+  }
+  return out;
+}
+// 多區間用：最長套牢幾年、到期末是不是還沒回到前高
+export function uwStats(eq, dayIdx) {
+  const lg = underwater(eq, dayIdx).longest;
+  return { uw: lg ? lg.years : 0, uwOpen: !!(lg && lg.recovery === null) };
 }
 
 export function summarize(eq, dayIdx, rf = 0) {
@@ -209,7 +225,8 @@ export function summarize(eq, dayIdx, rf = 0) {
   const ppy = years > 0 ? r.length / years : TRADING_DAYS;   // 這段期間平均一年幾個交易日
   const ex = r.map(x => x - rf / ppy);
   const down = r.filter(x => x < 0);
-  const dd = maxDrawdown(eq);
+  const dd = underwater(eq, dayIdx), lg = dd.longest;
+  const yrs = (a, b) => (dayIdx[b] - dayIdx[a]) / 365.25;
   // 年度報酬：每年最後一天的淨值相比
   const yearEnd = [];
   for (let i = 0; i < n; i++) {
@@ -224,6 +241,10 @@ export function summarize(eq, dayIdx, rf = 0) {
     sortino: down.length > 1 ? mean(ex) / std(down) * Math.sqrt(ppy) : NaN,
     mdd: dd.mdd, mddTop: dayToIso(dayIdx[dd.top]), mddTrough: dayToIso(dayIdx[dd.trough]),
     mddRecovery: dd.recovery !== null ? dayToIso(dayIdx[dd.recovery]) : null,
+    mddFall: yrs(dd.top, dd.trough), mddRecover: yrs(dd.trough, dd.recovery ?? n - 1),
+    uw: lg ? lg.years : 0, uwOpen: !!(lg && lg.recovery === null),
+    uwTop: lg ? dayToIso(dayIdx[lg.top]) : null, uwEnd: lg && lg.recovery !== null ? dayToIso(dayIdx[lg.recovery]) : null,
+    uwDepth: lg ? lg.depth : 0,
     calmar: dd.mdd < 0 ? cagr / Math.abs(dd.mdd) : NaN,
     bestYear: Math.max(...yearly), worstYear: Math.min(...yearly),
     yearly: yearEnd.map((p, k) => ({ year: p.y, ret: yearly[k] })),
@@ -281,7 +302,8 @@ function windowStats(data, code, r, si, ei, opts) {
   return {
     code, start: dayToIso(data.days[si]), end: dayToIso(data.days[ei]), years,
     total: net - 1, cagr: net > 0 ? net ** (1 / years) - 1 : -1,
-    mdd, vol: std(daily) * Math.sqrt(daily.length / years), syntheticShare: syn / (ei - si + 1),
+    mdd, vol: std(daily) * Math.sqrt(daily.length / years), ...uwStats(eq, data.days.subarray(si, ei + 1)),
+    syntheticShare: syn / (ei - si + 1),
   };
 }
 
@@ -573,7 +595,8 @@ export function trendWindows(data, codes, wins, opts, custom) {
       rows.push({
         code: c, start: bh.start, end: bh.end, years: bh.years,
         total: net - 1, cagr: net > 0 ? net ** (1 / bh.years) - 1 : -1, mdd: sim.mdd,
-        bhTotal: bh.total, bhCagr: bh.cagr, bhMdd: bh.mdd, syntheticShare: bh.syntheticShare,
+        ...uwStats(sim.eq, data.days.subarray(si, ei + 1)),
+        bhTotal: bh.total, bhCagr: bh.cagr, bhMdd: bh.mdd, bhUw: bh.uw, bhUwOpen: bh.uwOpen, syntheticShare: bh.syntheticShare,
       });
     }
   }
@@ -844,6 +867,8 @@ export function rebalWindows(data, cfg, wins, opts, custom) {
       row[name ? 'flatCagr' : 'cagr'] = net > 0 ? net ** (1 / years) - 1 : -1;
       row[name ? 'flatMdd' : 'mdd'] = mdd;
       row[name ? 'flatTotal' : 'total'] = net - 1;
+      const u = uwStats(eq, data.days.subarray(si, ei + 1));
+      row[name ? 'flatUw' : 'uw'] = u.uw; row[name ? 'flatUwOpen' : 'uwOpen'] = u.uwOpen;
     }
     rows.push(row);
   }

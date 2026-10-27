@@ -37,7 +37,7 @@ import pandas as pd
 from .costs import TaiwanCost
 from .data import KIND
 from .lots import LotAccount
-from .metrics import TRADING_DAYS
+from .metrics import TRADING_DAYS, uw_stats
 
 WATCH, HOLD, WAIT = 0, 1, 2
 NONE, RECOVER, ADD, EXIT = 0, 1, 2, 3
@@ -246,8 +246,10 @@ class TrendBacktest:
                 mdd = float((eq / np.maximum.accumulate(eq) - 1).min())
                 rows.append({"標的": NAMES[a], "起始日": s.date(), "結束日": e.date(), "年數": years,
                              "策略總報酬": net - 1, "策略年化": net ** (1 / years) - 1 if net > 0 else -1.0,
-                             "策略回撤": mdd, "持有總報酬": bh["總報酬"], "持有年化": bh["年化報酬"],
-                             "持有回撤": bh["最大回撤"], "模擬資料占比": bh["模擬資料占比"]})
+                             "策略回撤": mdd, **uw_stats(eq, self.rets.index[si:ei + 1], "策略"),
+                             "持有總報酬": bh["總報酬"], "持有年化": bh["年化報酬"], "持有回撤": bh["最大回撤"],
+                             "持有最長套牢": bh["最長套牢"], "持有套牢未結束": bh["套牢未結束"],
+                             "模擬資料占比": bh["模擬資料占比"]})
         return pd.DataFrame(rows)
 
     def rolling(self, years: float, assets=None) -> pd.DataFrame:

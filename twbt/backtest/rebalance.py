@@ -27,7 +27,7 @@ import pandas as pd
 
 from .data import KIND
 from .lots import LotAccount
-from .metrics import TRADING_DAYS, summarize
+from .metrics import TRADING_DAYS, summarize, uw_stats
 from .trend import HOLD, WAIT, TrendBacktest
 
 ASSETS = ["0050", "00631L", "00675L"]
@@ -232,6 +232,7 @@ class RebalBacktest:
                 net = eq[-1] / self.bh.capital
                 row[f"{name}年化"] = net ** (1 / years) - 1 if net > 0 else -1.0
                 row[f"{name}回撤"] = float((eq / np.maximum.accumulate(eq) - 1).min())
+                row.update(uw_stats(eq, self.idx[si:ei + 1], name))
             rows.append(row)
         return pd.DataFrame(rows)
 
@@ -243,4 +244,4 @@ class RebalBacktest:
 
 def stats(eq: pd.Series) -> dict:
     s = summarize(eq)
-    return {k: s[k] for k in ("起始日", "結束日", "總報酬", "年化報酬", "年化波動", "最大回撤", "夏普")}
+    return {k: s[k] for k in ("起始日", "結束日", "總報酬", "年化報酬", "年化波動", "最大回撤", "最長套牢", "最長套牢期間", "夏普")}

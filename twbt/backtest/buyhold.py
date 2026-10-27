@@ -17,7 +17,7 @@ import pandas as pd
 from .costs import TaiwanCost
 from .data import KIND, NAMES, load_returns, load_signal_inputs
 from .lots import LotAccount, load_lot_inputs
-from .metrics import TRADING_DAYS, summarize
+from .metrics import TRADING_DAYS, summarize, uw_stats
 
 
 class BuyHold:
@@ -115,6 +115,7 @@ class BuyHold:
             "年化報酬": final_net ** (1 / years) - 1 if final_net > 0 else -1.0,
             "最大回撤": mdd,
             "年化波動": float(np.std(r, ddof=1) * np.sqrt(len(r) / years)),
+            **uw_stats(path, self.rets.index[si:ei + 1]),
             "模擬資料占比": float(self.syn[asset].loc[s:e].mean()),
         }
 
@@ -191,6 +192,9 @@ def describe(results: pd.DataFrame, col: str = "年化報酬") -> pd.DataFrame:
     })
     if col in ("年化報酬", "總報酬"):
         out["虧損機率"] = g["總報酬"].agg(lambda x: (x < 0).mean())
+    if col == "最長套牢":                          # 越短越好：最小的是最好
+        out = out.rename(columns={"最差": "最短", "最好": "最長"})
+        out["期末還在套牢"] = g["套牢未結束"].mean()
     return out.T
 
 

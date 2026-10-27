@@ -1,10 +1,10 @@
 // 介面：讀設定 → 呼叫 engine.js 計算 → 畫結果
-import * as E from './engine.js?v=c401bac538';
-import { LineChart, ScatterChart } from './plot.js?v=c401bac538';
+import * as E from './engine.js?v=45f5734396';
+import { LineChart, ScatterChart } from './plot.js?v=45f5734396';
 
 // 版本號：tools/stamp_version.py 自動蓋上（日期 · 程式內容的 hash，跟 finance-app 一樣不手動編號）
-const BUILD_HASH = 'c401bac538';
-const BUILD_DATE = '2026-10-24';
+const BUILD_HASH = '45f5734396';
+const BUILD_DATE = '2026-10-27';
 
 const ORDER = ['TAIEX', '0050', '00631L', '00675L'];
 const LABEL = { TAIEX: '大盤（含息）', '0050': '0050', '00631L': '00631L 台灣50正2', '00675L': '00675L 加權正2' };
@@ -64,6 +64,11 @@ const moneyShort = x => !Number.isFinite(x) ? '－' : Math.abs(x) >= 1e8 ? (x / 
 // 總報酬很大時改用「幾倍」（期末 ÷ 期初），手機卡片才放得下
 const totalShort = x => !Number.isFinite(x) ? '－' : x >= 9.995 ? `${Math.round(1 + x).toLocaleString('zh-TW')} 倍` : pct(x, 0, true);
 const num2 = x => Number.isFinite(x) ? x.toFixed(2) : '－';
+// 時間長度（年）：不到 1 個月用天、不到 1 年用月，其他用年
+const dur = y => !Number.isFinite(y) ? '－' : y < 1 / 12 ? `${Math.round(y * 365.25)} 天` : y < 1 ? `${Math.round(y * 12)} 個月` : `${y.toFixed(1)} 年`;
+// 最長套牢：期末還沒回到前高的加「+」（實際只會更長）
+const uwShort = s => s.uw > 0 ? dur(s.uw) + (s.uwOpen ? '+' : '') : '沒有';
+const UW_HINT = '最長套牢 = 從前高跌下去、到淨值回到前高，花最久的那一次；「+」= 到期末還沒回到前高，實際更長。';
 const cls = x => (x > 0 ? 'pos' : x < 0 ? 'neg' : '');
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const yearOf = ms => new Date(ms).getUTCFullYear();
@@ -421,11 +426,11 @@ function renderRebalPeriod(cfg) {
     : res.shifted ? `<div class="warn">這個配置最早 ${res.shifted} 才有資料${cfg.trend ? '（正2 的均線要先累積）' : ''}，從那天開始。</div>` : '';
   html += `<section class="card"><h3>${esc(cfgLabel(cfg))}</h3>
     <p class="hint">${s0} ～ ${s1} · 再平衡 ${nReb} 次${cfg.trend ? ` · 均線訊號 ${nSig} 次` : ''} · 交易 ${res.main.trades} 筆 · 期末 ${moneyShort(res.stats.final)}</p>
-    <div class="tbl-wrap"><table class="cmp-tbl"><thead><tr><th></th><th>年化</th><th class="tot">總報酬</th><th>最大回撤</th><th>報酬÷回撤</th></tr></thead><tbody>
-    ${items.map((it, i) => groupRow(5, items[i - 1]?.k, it.k) + `<tr class="${it.k === 'main' ? 'main' : ''}"><td><span class="dot" style="background:${it.color}"></span>${it.name}${it.note ? `<br><small style="color:var(--muted)">從 ${it.note} 起</small>` : ''}</td>
+    <div class="tbl-wrap"><table class="cmp-tbl"><thead><tr><th></th><th>年化</th><th class="tot">總報酬</th><th>最大回撤</th><th>最長套牢</th><th>報酬÷回撤</th></tr></thead><tbody>
+    ${items.map((it, i) => groupRow(6, items[i - 1]?.k, it.k) + `<tr class="${it.k === 'main' ? 'main' : ''}"><td><span class="dot" style="background:${it.color}"></span>${it.name}${it.note ? `<br><small style="color:var(--muted)">從 ${it.note} 起</small>` : ''}</td>
       <td class="n ${cls(it.st.cagr)}">${pct(it.st.cagr, 1, true)}</td><td class="n tot">${totalShort(it.st.total)}</td>
-      <td class="n neg">${pct(it.st.mdd)}</td><td class="n">${num2(it.st.calmar)}</td></tr>`).join('')}
-    </tbody></table></div>${(() => {
+      <td class="n neg">${pct(it.st.mdd)}</td><td class="n">${uwShort(it.st)}</td><td class="n">${num2(it.st.calmar)}</td></tr>`).join('')}
+    </tbody></table></div><p class="hint">${UW_HINT}</p>${(() => {
       const a = items.find(x => x.k === 'main'), b = items.find(x => x.k === 'noTr');
       if (!a || !b) return '';
       const d = (a.st.cagr - b.st.cagr) * 100, m = (a.st.mdd - b.st.mdd) * 100;
@@ -459,14 +464,15 @@ function renderRebalPeriod(cfg) {
 }
 
 function rebalCompareTable(sets, years) {
-  // sets: [{k, cagr:[], mdd:[]}]
+  // sets: [{k, cagr:[], mdd:[], uw:[]}]
   const q = (a, p) => E.quantile([...a].sort((x, y) => x - y), p);
-  return `<div class="tbl-wrap"><table class="cmp-tbl"><thead><tr><th></th><th>年化中位數</th><th>年化 5%</th><th>虧損機率</th><th>回撤中位數</th><th>回撤 5%</th></tr></thead><tbody>
-    ${sets.map((it, i) => { const m = RB_ITEMS.find(x => x[0] === it.k); return groupRow(6, sets[i - 1]?.k, it.k) + `<tr class="${it.k === 'main' ? 'main' : ''}"><td><span class="dot" style="background:${css(m[2])}"></span>${rbLabel(it.k)}</td>
+  return `<div class="tbl-wrap"><table class="cmp-tbl"><thead><tr><th></th><th>年化中位數</th><th>年化 5%</th><th>虧損機率</th><th>回撤中位數</th><th>回撤 5%</th><th>套牢中位數</th><th>套牢 95%</th></tr></thead><tbody>
+    ${sets.map((it, i) => { const m = RB_ITEMS.find(x => x[0] === it.k); return groupRow(8, sets[i - 1]?.k, it.k) + `<tr class="${it.k === 'main' ? 'main' : ''}"><td><span class="dot" style="background:${css(m[2])}"></span>${rbLabel(it.k)}</td>
       <td class="n ${cls(q(it.cagr, .5))}">${pct(q(it.cagr, .5), 1, true)}</td><td class="n ${cls(q(it.cagr, .05))}">${pct(q(it.cagr, .05), 1, true)}</td>
       <td class="n">${pct(it.cagr.filter(x => x < 0).length / it.cagr.length, 0)}</td>
-      <td class="n neg">${pct(q(it.mdd, .5), 0)}</td><td class="n neg">${pct(q(it.mdd, .05), 0)}</td></tr>`; }).join('')}
-    </tbody></table></div>`;
+      <td class="n neg">${pct(q(it.mdd, .5), 0)}</td><td class="n neg">${pct(q(it.mdd, .05), 0)}</td>
+      <td class="n">${dur(q(it.uw, .5))}</td><td class="n">${dur(q(it.uw, .95))}</td></tr>`; }).join('')}
+    </tbody></table></div><p class="hint">套牢 = 每一段期間裡最長的那次套牢（從前高跌下去到回到前高）；95% = 比較慘的那 5% 至少套多久。</p>`;
 }
 function winLine(rows, keys) {
   const name = k => rbLabel(k);
@@ -488,12 +494,14 @@ function renderRebalMulti(cfg, wins, title) {
   for (const r of rows) {
     const a = bh.get('0050' + key(r)), b = bh.get('00631L' + key(r)), c = tr.get(key(r));
     r.bh50Cagr = a?.cagr ?? null; r.bh50Mdd = a?.mdd ?? null; r.bh631Cagr = b?.cagr ?? null; r.bh631Mdd = b?.mdd ?? null;
-    r.tr631Cagr = c?.cagr ?? null; r.tr631Mdd = c?.mdd ?? null;
-    const d = nt.get(key(r)); r.noTrCagr = d?.cagr ?? null; r.noTrMdd = d?.mdd ?? null;
+    r.bh50Uw = a?.uw ?? null; r.bh631Uw = b?.uw ?? null;
+    r.tr631Cagr = c?.cagr ?? null; r.tr631Mdd = c?.mdd ?? null; r.tr631Uw = c?.uw ?? null;
+    const d = nt.get(key(r)); r.noTrCagr = d?.cagr ?? null; r.noTrMdd = d?.mdd ?? null; r.noTrUw = d?.uw ?? null;
   }
   const sets = RB_ITEMS.map(([k]) => {
     const g = k === 'main' ? rows : rows.filter(r => r[k + 'Cagr'] != null);
-    return { k, cagr: g.map(r => k === 'main' ? r.cagr : r[k + 'Cagr']), mdd: g.map(r => k === 'main' ? r.mdd : r[k + 'Mdd']) };
+    return { k, cagr: g.map(r => k === 'main' ? r.cagr : r[k + 'Cagr']), mdd: g.map(r => k === 'main' ? r.mdd : r[k + 'Mdd']),
+      uw: g.map(r => k === 'main' ? r.uw : r[k + 'Uw']) };
   }).filter(s => s.cagr.length);
   const m = state.metric === 'mdd' ? 'mdd' : 'cagr', M = METRICS[m];
   const dist = sets.map(st => {
@@ -570,6 +578,16 @@ function legendHtml(list, dashed) {
   return `<div class="legend">${list.map(c => `<span><i style="background:${color(c)}"></i>${SHORT[c]}</span>`).join('')}${dashed ? '<span><i class="dash"></i>虛線 = 模擬資料</span>' : ''}</div>`;
 }
 
+// 「更多指標」裡最大回撤那一次、最長套牢那一次的日期與時間
+function mddDetail(s, prefix = '') {
+  if (s.mdd >= 0) return `<dt>${prefix}回撤</dt><dd>沒有</dd>`;
+  const sub = t => `<br><small style="color:var(--muted)">${t}</small>`;
+  let h = `<dt>${prefix}回撤期間</dt><dd>${s.mddTop} → ${s.mddTrough}${sub(`跌了 ${dur(s.mddFall)}`)}</dd>
+    <dt>回到前高</dt><dd>${s.mddRecovery ?? '尚未'}${sub(s.mddRecovery ? `花了 ${dur(s.mddRecover)}` : `已經 ${dur(s.mddRecover)}`)}</dd>`;
+  if (s.uwTop !== s.mddTop) h += `<dt>${prefix}最長套牢</dt><dd>${s.uwTop} → ${s.uwEnd ?? '尚未回到前高'}${sub(`${uwShort(s)}，最深 ${pct(s.uwDepth)}`)}</dd>`;
+  return h;
+}
+
 // ---------- 自訂區間 ----------
 function renderPeriod(res) {
   destroyCharts();
@@ -591,6 +609,7 @@ function renderPeriod(res) {
       <dl class="kv">
         <dt>總報酬</dt><dd class="${cls(s.total)}">${pct(s.total, 1, true)}</dd>
         <dt>最大回撤</dt><dd class="neg">${pct(s.mdd)}</dd>
+        <dt>最長套牢</dt><dd>${uwShort(s)}</dd>
         <dt>期末金額</dt><dd>${money(s.final)}</dd>
         ${s.lots0 != null ? `<dt>期初買進</dt><dd>${s.lots0 > 0 ? `${s.lots0.toLocaleString()} 張` : '<span class="neg">錢不夠買一張</span>'}<br><small style="color:var(--muted)">一張 ${money(s.lotPrice)}</small></dd>` : ''}
       </dl>
@@ -602,9 +621,7 @@ function renderPeriod(res) {
           <dt>卡瑪</dt><dd>${num2(s.calmar)}</dd>
           <dt>最好年度</dt><dd class="${cls(s.bestYear)}">${pct(s.bestYear, 1, true)}</dd>
           <dt>最差年度</dt><dd class="${cls(s.worstYear)}">${pct(s.worstYear, 1, true)}</dd>
-          <dt>回撤高點</dt><dd>${s.mddTop}</dd>
-          <dt>回撤低點</dt><dd>${s.mddTrough}</dd>
-          <dt>回到前高</dt><dd>${s.mddRecovery ?? '尚未'}</dd>
+          ${mddDetail(s)}
         </dl>
       </details>
     </article>`;
@@ -641,6 +658,8 @@ const METRICS = {
   total: { label: '總報酬', sign: true },
 };
 
+const openShare = (rows, c, k) => { const g = rows.filter(r => r.code === c); return g.filter(r => r[k]).length / g.length; };
+
 function renderMulti(rows, title) {
   destroyCharts();
   const list = codes().filter(c => rows.some(r => r.code === c));
@@ -652,6 +671,7 @@ function renderMulti(rows, title) {
   const d = E.describe(rows, list, m);
   const dC = m === 'cagr' ? d : E.describe(rows, list, 'cagr');
   const dD = m === 'mdd' ? d : E.describe(rows, list, 'mdd');
+  const dU = E.describe(rows, list, 'uw');
   const counts = list.map(c => d[c].count);
   const synShare = Object.fromEntries(list.map(c => {
     const g = rows.filter(r => r.code === c);
@@ -685,7 +705,12 @@ function renderMulti(rows, title) {
     ${grp('最大回撤')}
     ${row('中位數', c => cell(dD[c].p50), true)}
     ${row('最差', c => cell(dD[c].min))}
-    </tbody></table></div>`;
+    ${grp('最長套牢')}
+    ${row('中位數', c => `<td class="n">${dur(dU[c].p50)}</td>`, true)}
+    ${row('95%', c => `<td class="n">${dur(dU[c].p95)}</td>`)}
+    ${row('最長', c => `<td class="n">${dur(dU[c].max)}</td>`)}
+    ${row('期末還在套牢', c => `<td class="n">${pct(openShare(rows, c, 'uwOpen'), 0)}</td>`)}
+    </tbody></table></div><p class="hint" style="margin-top:10px">${UW_HINT}「期末還在套牢」= 最長那次到期末還沒結束的區間比例。</p>`;
   if (list.includes('0050') && list.length > 1) {
     const others = list.filter(c => c !== '0050');
     html += `<p class="hint" style="margin-top:10px">年化報酬勝過 0050 的比例：${others.map(c => `${SHORT[c]} <b>${pct(E.winRate(rows, c, '0050', 'cagr'), 0)}</b>`).join('、')}</p>`;
@@ -780,6 +805,7 @@ function renderTrendPeriod(res) {
         <span></span><span class="h">策略</span><span class="h">買進持有</span>
         ${line('總報酬', s.total, b.total, totalShort, true)}
         ${line('最大回撤', s.mdd, b.mdd, x => pct(x, 1), false)}
+        ${line('最長套牢', s, b, uwShort, false)}
         ${line('期末金額', s.final, b.final, moneyShort, false)}
       </div>
       <dl class="kv">
@@ -796,7 +822,7 @@ function renderTrendPeriod(res) {
           ${line('最好年度', s.bestYear, b.bestYear, x => pct(x, 1, true), true)}
           ${line('最差年度', s.worstYear, b.worstYear, x => pct(x, 1, true), true)}
         </div>
-        <dl class="kv"><dt>策略回撤</dt><dd>${s.mddTop} → ${s.mddTrough}</dd><dt>回到前高</dt><dd>${s.mddRecovery ?? '尚未'}</dd></dl>
+        <dl class="kv">${mddDetail(s, '策略')}</dl>
       </details>
     </article>`;
   }).join('')}</div>`;
@@ -864,9 +890,9 @@ function renderTrendMulti(rows, title) {
   }
   const m = state.metric, M = METRICS[m];
   const bhKey = { cagr: 'bhCagr', mdd: 'bhMdd', total: 'bhTotal' };
-  const asBh = rows.map(r => ({ code: r.code, start: r.start, end: r.end, cagr: r.bhCagr, mdd: r.bhMdd, total: r.bhTotal }));
-  const ds = { cagr: E.describe(rows, list, 'cagr'), mdd: E.describe(rows, list, 'mdd'), total: E.describe(rows, list, 'total') };
-  const db = { cagr: E.describe(asBh, list, 'cagr'), mdd: E.describe(asBh, list, 'mdd'), total: E.describe(asBh, list, 'total') };
+  const asBh = rows.map(r => ({ code: r.code, start: r.start, end: r.end, cagr: r.bhCagr, mdd: r.bhMdd, total: r.bhTotal, uw: r.bhUw }));
+  const ds = { cagr: E.describe(rows, list, 'cagr'), mdd: E.describe(rows, list, 'mdd'), total: E.describe(rows, list, 'total'), uw: E.describe(rows, list, 'uw') };
+  const db = { cagr: E.describe(asBh, list, 'cagr'), mdd: E.describe(asBh, list, 'mdd'), total: E.describe(asBh, list, 'total'), uw: E.describe(asBh, list, 'uw') };
   const counts = list.map(c => ds.cagr[c].count);
   const win = Object.fromEntries(list.map(c => {
     const g = rows.filter(r => r.code === c);
@@ -888,6 +914,7 @@ function renderTrendMulti(rows, title) {
   </section>`;
 
   const pair = (a, b, sign) => `<td class="n pair"><b class="${cls(a)}">${pct(a, 1, sign)}</b><small>${pct(b, 1, sign)}</small></td>`;
+  const pairT = (a, b) => `<td class="n pair"><b>${a}</b><small>${b}</small></td>`;
   const row = (lbl, f, em) => `<tr class="${em ? 'em' : ''}"><td class="lbl">${lbl}</td>${list.map(c => f(c)).join('')}</tr>`;
   const grp = t => `<tr class="grp"><td colspan="${list.length + 1}">${t}</td></tr>`;
   html += `<section class="card"><h3>統計表</h3><p class="hint">每格上面是策略，下面灰色是同一段期間的買進持有。</p><div class="tbl-wrap"><table>
@@ -905,7 +932,12 @@ function renderTrendMulti(rows, title) {
     ${grp('最大回撤')}
     ${row('中位數', c => pair(ds.mdd[c].p50, db.mdd[c].p50), true)}
     ${row('最差', c => pair(ds.mdd[c].min, db.mdd[c].min))}
-    </tbody></table></div></section>`;
+    ${grp('最長套牢')}
+    ${row('中位數', c => pairT(dur(ds.uw[c].p50), dur(db.uw[c].p50)), true)}
+    ${row('95%', c => pairT(dur(ds.uw[c].p95), dur(db.uw[c].p95)))}
+    ${row('最長', c => pairT(dur(ds.uw[c].max), dur(db.uw[c].max)))}
+    ${row('期末還在套牢', c => pairT(pct(openShare(rows, c, 'uwOpen'), 0), pct(openShare(rows, c, 'bhUwOpen'), 0)))}
+    </tbody></table></div><p class="hint" style="margin-top:10px">${UW_HINT}「期末還在套牢」= 最長那次到期末還沒結束的區間比例。</p></section>`;
 
   const diffLabel = { cagr: '策略年化 − 買進持有年化（百分點）', mdd: '策略回撤 − 買進持有回撤（百分點，正 = 回撤較小）', total: '策略總報酬 − 買進持有總報酬（百分點）' }[m];
   html += `<section class="card"><h3>策略多賺（少賠）多少，依起始日</h3><p class="hint">${diffLabel}。0 以上 = 策略比較好。</p>
