@@ -50,6 +50,27 @@ def max_drawdown(equity: pd.Series) -> tuple[float, pd.Timestamp, pd.Timestamp, 
     return u["mdd"], u["top"], u["trough"], u["recovery"]
 
 
+def longest_uw(eq, t) -> tuple[float, bool]:
+    """最長套牢（年）與它到期末是不是還沒結束；定義同 underwater()，t = 每個點的時間（年，遞增）。
+
+    蒙地卡羅的模擬行情沒有日期，用這個（t = 累積經過的日曆年數）。
+    """
+    peak, peak_t, under, best, is_open = eq[0], t[0], False, 0.0, False
+    for i in range(1, len(eq)):
+        if eq[i] >= peak:
+            if under:
+                d = t[i] - peak_t
+                if d > best:
+                    best = d
+                under = False
+            peak, peak_t = eq[i], t[i]
+        else:
+            under = True
+    if under and t[-1] - peak_t > best:          # 一樣長取最早那次（跟 underwater() 一樣）
+        best, is_open = t[-1] - peak_t, True
+    return float(best), is_open
+
+
 def uw_stats(eq, index, prefix: str = "") -> dict:
     """多區間用：這段期間最長套牢幾年、到期末是不是還沒回到前高（那最長套牢只是「至少」）。"""
     lg = underwater(pd.Series(eq, index=index))["longest"]

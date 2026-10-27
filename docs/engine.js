@@ -207,6 +207,19 @@ export function underwater(eq, dayIdx) {
   }
   return out;
 }
+// 最長套牢（年）與它到期末是不是還沒結束，定義同 underwater()；t = 每個點的時間（年，遞增）。
+// 蒙地卡羅的模擬行情沒有日期，用這個（t = 累積經過的日曆年數）。同 metrics.py 的 longest_uw()
+export function longestUw(eq, t) {
+  let peak = eq[0], peakT = t[0], under = false, best = 0, open = false;
+  for (let i = 1; i < eq.length; i++) {
+    if (eq[i] >= peak) {
+      if (under) { if (t[i] - peakT > best) best = t[i] - peakT; under = false; }
+      peak = eq[i]; peakT = t[i];
+    } else under = true;
+  }
+  if (under && t[t.length - 1] - peakT > best) { best = t[t.length - 1] - peakT; open = true; }   // 一樣長取最早那次
+  return { uw: best, uwOpen: open };
+}
 // 多區間用：最長套牢幾年、到期末是不是還沒回到前高
 export function uwStats(eq, dayIdx) {
   const lg = underwater(eq, dayIdx).longest;
@@ -644,6 +657,9 @@ function mcPath(src, idx, p, warm, kind, cost, capital) {
   const acct = new LotAccount(capital, cost, kind);
   let cashAtExit = capital, trades = 0;
   let peak = capital, mdd = 0, v = capital;
+  const T = new Float64Array(n - warm), se = new Float64Array(n - warm), be = new Float64Array(n - warm);   // 累積日曆年數、每天淨值
+  for (let t = warm + 1; t < n; t++) T[t - warm] = T[t - warm - 1] + src.dt[idx[t - 1]];
+  se[0] = capital;
   for (let t = warm + 1; t < n; t++) {
     const a = act[t];
     if (div[t] !== 0) acct.cash += acct.shares * div[t];
@@ -653,18 +669,23 @@ function mcPath(src, idx, p, warm, kind, cost, capital) {
     else if (a === ACT.EXIT) { acct.sellAll(lp, LOT); cashAtExit = acct.cash; trades++; }
     else if (div[t] !== 0 && status[t] === STATUS.HOLD) acct.buyMax(acct.cash, lp, LOT);
     v = t === n - 1 ? acct.finalValue(lp, LOT) : acct.value(lp, LOT);
+    se[t - warm] = v;
     if (v > peak) peak = v; else if (v / peak - 1 < mdd) mdd = v / peak - 1;
   }
   const b = new LotAccount(capital, cost, kind);
   b.buyMax(b.cash, px[warm] * LOT, LOT);
   let bv = b.value(px[warm] * LOT, LOT), bpeak = bv, bmdd = 0;
+  be[0] = bv;
   for (let t = warm + 1; t < n; t++) {
     if (div[t] !== 0) { b.cash += b.shares * div[t]; b.buyMax(b.cash, px[t] * LOT, LOT); }
     bv = t === n - 1 ? b.finalValue(px[t] * LOT, LOT) : b.value(px[t] * LOT, LOT);
+    be[t - warm] = bv;
     if (bv > bpeak) bpeak = bv; else if (bv / bpeak - 1 < bmdd) bmdd = bv / bpeak - 1;
   }
   const cg = x => (x > 0 ? x ** (1 / years) - 1 : -1);
-  return { cagr: cg(v / capital), mdd, bhCagr: cg(bv / capital), bhMdd: bmdd, trades };
+  const su = longestUw(se, T), bu = longestUw(be, T);
+  return { cagr: cg(v / capital), mdd, bhCagr: cg(bv / capital), bhMdd: bmdd, trades,
+    uw: su.uw, uwOpen: su.uwOpen, bhUw: bu.uw, bhUwOpen: bu.uwOpen };
 }
 
 // 跑 n 條路徑；每 chunk 條讓出一次畫面（onProgress 回報進度，回傳 false 可中止）
@@ -704,6 +725,9 @@ export function mcSummary(rows) {
     n, win: d.filter(x => x > 0).length / n,
     diff50: q(d, 0.5), diff5: q(d, 0.05), diff95: q(d, 0.95),
     mddBetter: share(r => r.mdd > r.bhMdd),
+    uw50: q(rows.map(r => r.uw), 0.5), bhUw50: q(rows.map(r => r.bhUw), 0.5),
+    uw95: q(rows.map(r => r.uw), 0.95), bhUw95: q(rows.map(r => r.bhUw), 0.95),
+    uwBetter: share(r => r.uw < r.bhUw),
     loss: share(r => r.cagr < 0), bhLoss: share(r => r.bhCagr < 0),
     trades: rows.reduce((a, r) => a + r.trades, 0) / n,
   };
@@ -908,11 +932,13 @@ export function rebalMcPath(data, cfg, opts, custom, idx, warm, yearsIn, srcIn) 
     preps: cf.trend ? Object.fromEntries(cs.filter(c => preps[c]).map(c => [c, preps[c]])) : {},
     keyAt: t => (fd ? Math.floor((t - warm) / fd) : null) });
   const ei = n - 1, capital = opts.capital ?? 1_000_000;
+  const T = new Float64Array(n - warm);                         // 從 warm 起累積的日曆年數
+  for (let j = warm + 1; j < n; j++) T[j - warm] = T[j - warm - 1] + dtp[j];
   const res = eq => {
     let peak = eq[0], mdd = 0;
     for (const v of eq) { if (v > peak) peak = v; const d = v / peak - 1; if (d < mdd) mdd = d; }
     const net = eq[eq.length - 1] / capital;
-    return { cagr: net > 0 ? net ** (1 / years) - 1 : -1, mdd };
+    return { cagr: net > 0 ? net ** (1 / years) - 1 : -1, mdd, uw: longestUw(eq, T).uw };
   };
   const main = res(rebalSim(data, mk(cfg, codes), cfg, warm, ei, opts, false).eq);
   const flatCfg = { ...cfg, freq: 'none', band: 0 };
@@ -921,12 +947,12 @@ export function rebalMcPath(data, cfg, opts, custom, idx, warm, yearsIn, srcIn) 
   const bh = res(rebalSim(data, mk(bhCfg, ['0050']), bhCfg, warm, ei, opts, false).eq);
   const trCfg = { weights: { '00631L': 1 }, freq: 'none', band: 0, cashRate: 0, trend: true };
   const tr = res(rebalSim(data, mk(trCfg, ['00631L']), trCfg, warm, ei, opts, false).eq);
-  const out = { cagr: main.cagr, mdd: main.mdd, flatCagr: flat.cagr, flatMdd: flat.mdd,
-    bhCagr: bh.cagr, bhMdd: bh.mdd, trCagr: tr.cagr, trMdd: tr.mdd };
+  const out = { cagr: main.cagr, mdd: main.mdd, uw: main.uw, flatCagr: flat.cagr, flatMdd: flat.mdd, flatUw: flat.uw,
+    bhCagr: bh.cagr, bhMdd: bh.mdd, bhUw: bh.uw, trCagr: tr.cagr, trMdd: tr.mdd, trUw: tr.uw };
   if (cfg.trend && codes.some(c => LEVERAGED.has(c))) {          // 同配置、同規則、不搭配均線
     const ntCfg = { ...cfg, trend: false };
     const nt = res(rebalSim(data, mk(ntCfg, codes), ntCfg, warm, ei, opts, false).eq);
-    out.noTrCagr = nt.cagr; out.noTrMdd = nt.mdd;
+    out.noTrCagr = nt.cagr; out.noTrMdd = nt.mdd; out.noTrUw = nt.uw;
   }
   return out;
 }

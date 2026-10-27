@@ -1,9 +1,9 @@
 // 介面：讀設定 → 呼叫 engine.js 計算 → 畫結果
-import * as E from './engine.js?v=45f5734396';
-import { LineChart, ScatterChart } from './plot.js?v=45f5734396';
+import * as E from './engine.js?v=34b224aaab';
+import { LineChart, ScatterChart } from './plot.js?v=34b224aaab';
 
 // 版本號：tools/stamp_version.py 自動蓋上（日期 · 程式內容的 hash，跟 finance-app 一樣不手動編號）
-const BUILD_HASH = '45f5734396';
+const BUILD_HASH = '34b224aaab';
 const BUILD_DATE = '2026-10-27';
 
 const ORDER = ['TAIEX', '0050', '00631L', '00675L'];
@@ -472,7 +472,7 @@ function rebalCompareTable(sets, years) {
       <td class="n">${pct(it.cagr.filter(x => x < 0).length / it.cagr.length, 0)}</td>
       <td class="n neg">${pct(q(it.mdd, .5), 0)}</td><td class="n neg">${pct(q(it.mdd, .05), 0)}</td>
       <td class="n">${dur(q(it.uw, .5))}</td><td class="n">${dur(q(it.uw, .95))}</td></tr>`; }).join('')}
-    </tbody></table></div><p class="hint">套牢 = 每一段期間裡最長的那次套牢（從前高跌下去到回到前高）；95% = 比較慘的那 5% 至少套多久。</p>`;
+    </tbody></table></div><p class="hint">套牢 = 每一段期間（或每一條模擬）裡最長的那次套牢（從前高跌下去到回到前高）；95% = 比較慘的那 5% 至少套多久。</p>`;
 }
 function winLine(rows, keys) {
   const name = k => rbLabel(k);
@@ -1045,14 +1045,14 @@ async function runRbMC(compare) {
   $('status').textContent = `模擬 ${out.length * n} 條，${(Math.round(performance.now() - t0) / 1000).toFixed(1)} 秒`;
   compare ? renderRbMCCompare(mcLast) : renderRbMC(mcLast);
 }
-const RB_MC_KEYS = [['main', 'cagr', 'mdd'], ['noTr', 'noTrCagr', 'noTrMdd'], ['flat', 'flatCagr', 'flatMdd'], ['bh50', 'bhCagr', 'bhMdd'], ['tr631', 'trCagr', 'trMdd']];
+const RB_MC_KEYS = [['main', 'cagr', 'mdd', 'uw'], ['noTr', 'noTrCagr', 'noTrMdd', 'noTrUw'], ['flat', 'flatCagr', 'flatMdd', 'flatUw'], ['bh50', 'bhCagr', 'bhMdd', 'bhUw'], ['tr631', 'trCagr', 'trMdd', 'trUw']];
 function renderRbMC(m) {
   destroyCharts();
   const o = m.out[0], rows = o.rows, n = rows.length;
   const keys = RB_MC_KEYS.filter(([, c]) => rows[0]?.[c] !== undefined);   // 沒搭配均線時沒有「不搭配均線」那一組
-  const sets = keys.map(([k, c, d]) => ({ k, cagr: rows.map(r => r[c]), mdd: rows.map(r => r[d]) }));
+  const sets = keys.map(([k, c, d, u]) => ({ k, cagr: rows.map(r => r[c]), mdd: rows.map(r => r[d]), uw: rows.map(r => r[u]) }));
   const share = f => pct(rows.filter(f).length / n, 0);
-  const vs = keys.slice(1).map(([k, c, d]) => `${rbLabel(k)}：報酬贏 <b>${share(r => r.cagr > r[c])}</b>、回撤小 <b>${share(r => r.mdd > r[d])}</b>`).join('<br>');
+  const vs = keys.slice(1).map(([k, c, d, u]) => `${rbLabel(k)}：報酬贏 <b>${share(r => r.cagr > r[c])}</b>、回撤小 <b>${share(r => r.mdd > r[d])}</b>、套牢短 <b>${share(r => r.uw < r[u])}</b>`).join('<br>');
   $('results').innerHTML = `<section class="card"><h3>${n.toLocaleString()} 條 ${m.years} 年模擬行情 · 每段${BLOCK_LABEL[m.block]}</h3>
     <p class="hint">${esc(cfgLabel(m.cfg))} · 取樣 ${o.from}～${o.to}${state.useSyn ? '（含上市前模擬）' : '（只用真實資料）'}。模擬行情沒有日曆，「每季」用 63 個交易日近似。</p>
     <p class="hint">你的設定 vs ${vs}</p>
@@ -1071,11 +1071,11 @@ function renderRbMCCompare(m) {
   const pc = (rows, f) => pct(rows.filter(f).length / rows.length, 0);
   const q = (a, p) => E.quantile([...a].sort((x, y) => x - y), p);
   $('results').innerHTML = `<section class="card"><h3>各種區塊長度比較（每組 ${m.n.toLocaleString()} 條 ${m.years} 年）</h3>
-    <p class="hint">${esc(cfgLabel(m.cfg))}。每格上面是你的設定的年化中位數 / 回撤中位數，下面是報酬贏過對照組的機率。</p>
+    <p class="hint">${esc(cfgLabel(m.cfg))}。「你的設定」那欄：年化中位數，下面是回撤中位數與最長套牢中位數；其他欄：報酬贏過對照組的機率，下面是回撤比較小、套牢比較短的機率。</p>
     <div class="tbl-wrap"><table class="cmp-tbl"><thead><tr><th>每段</th><th>你的設定</th>${m.out[0].rows[0]?.noTrCagr !== undefined ? '<th>vs 不搭配均線</th>' : ''}<th>vs 不再平衡</th><th>vs 0050 持有</th><th>vs 00631L 均線</th></tr></thead><tbody>
     ${m.out.map(o => { const r = o.rows; return `<tr><td class="lbl">${BLOCK_LABEL[o.block]}</td>
-      <td class="n pair"><b>${pct(q(r.map(x => x.cagr), .5), 1, true)}</b><small>${pct(q(r.map(x => x.mdd), .5), 0)}</small></td>
-      ${[...(r[0]?.noTrCagr !== undefined ? [['noTrCagr', 'noTrMdd']] : []), ['flatCagr', 'flatMdd'], ['bhCagr', 'bhMdd'], ['trCagr', 'trMdd']].map(([c, d]) => `<td class="n pair"><b>${pc(r, x => x.cagr > x[c])}</b><small>回撤小 ${pc(r, x => x.mdd > x[d])}</small></td>`).join('')}</tr>`; }).join('')}
+      <td class="n pair"><b>${pct(q(r.map(x => x.cagr), .5), 1, true)}</b><small>${pct(q(r.map(x => x.mdd), .5), 0)} · ${dur(q(r.map(x => x.uw), .5))}</small></td>
+      ${[...(r[0]?.noTrCagr !== undefined ? [['noTrCagr', 'noTrMdd', 'noTrUw']] : []), ['flatCagr', 'flatMdd', 'flatUw'], ['bhCagr', 'bhMdd', 'bhUw'], ['trCagr', 'trMdd', 'trUw']].map(([c, d, u]) => `<td class="n pair"><b>${pc(r, x => x.cagr > x[c])}</b><small>回撤小 ${pc(r, x => x.mdd > x[d])}<br>套牢短 ${pc(r, x => x.uw < x[u])}</small></td>`).join('')}</tr>`; }).join('')}
     </tbody></table></div></section>`;
 }
 
@@ -1098,7 +1098,10 @@ function renderMC(m) {
       <div class="kpi" style="--c:${color(c)}"><div class="t">年化多賺（中位數）</div><div class="v ${cls(s.diff50)}">${(s.diff50 * 100 > 0 ? '+' : '') + (s.diff50 * 100).toFixed(1)}</div><div class="s">百分點；5%～95%：${(s.diff5 * 100).toFixed(1)}～${(s.diff95 * 100).toFixed(1)}</div></div>
       <div class="kpi" style="--c:${color(c)}"><div class="t">最大回撤比較小的機率</div><div class="v">${pct(s.mddBetter, 0)}</div><div class="s">平均每年進出 ${(s.trades / years).toFixed(1)} 次</div></div>
       <div class="kpi" style="--c:${color(c)}"><div class="t">${years} 年後還虧錢的機率</div><div class="v">${pct(s.loss, 0)}</div><div class="s">買進持有 ${pct(s.bhLoss, 0)}</div></div>
+      <div class="kpi" style="--c:${color(c)}"><div class="t">最長套牢（中位數）</div><div class="v">${dur(s.uw50)}</div><div class="s">買進持有 ${dur(s.bhUw50)}；最慘 5%：${dur(s.uw95)} vs ${dur(s.bhUw95)}</div></div>
+      <div class="kpi" style="--c:${color(c)}"><div class="t">套牢比較短的機率</div><div class="v">${pct(s.uwBetter, 0)}</div><div class="s">最長套牢比買進持有短</div></div>
     </div></div>`; }).join('')}
+    <p class="hint" style="margin-top:12px">${UW_HINT}模擬行情沒有日期，時間用抽到的那幾天實際經過的日曆時間加總。</p>
   </section>`;
 
   const M = METRICS[metric];
@@ -1132,9 +1135,9 @@ function renderMCCompare(m) {
   const list = [...new Set(out.map(o => o.code))];
   const blocks = [...new Set(out.map(o => o.block))];
   const cell = (b, c) => { const o = out.find(x => x.block === b && x.code === c); const s = E.mcSummary(o.rows);
-    return `<td class="n pair"><b>${pct(s.win, 0)}</b><small>${(s.diff50 > 0 ? '+' : '') + (s.diff50 * 100).toFixed(1)} 點 · 回撤小 ${pct(s.mddBetter, 0)}</small></td>`; };
+    return `<td class="n pair"><b>${pct(s.win, 0)}</b><small>${(s.diff50 > 0 ? '+' : '') + (s.diff50 * 100).toFixed(1)} 點 · 回撤小 ${pct(s.mddBetter, 0)} · 套牢短 ${pct(s.uwBetter, 0)}</small></td>`; };
   $('results').innerHTML = `<section class="card"><h3>各種區塊長度比較（每組 ${n.toLocaleString()} 條 ${years} 年）</h3>
-    <p class="hint">每格上面是「策略報酬贏的機率」，下面是年化多賺的中位數與「最大回撤比較小的機率」。</p>
+    <p class="hint">每格上面是「策略報酬贏的機率」，下面是年化多賺的中位數、「最大回撤比較小的機率」與「最長套牢比較短的機率」。</p>
     <div class="tbl-wrap"><table><thead><tr><th>每段平均長度</th>${list.map(c => `<th><span class="dot" style="background:${color(c)}"></span>${SHORT[c]}</th>`).join('')}</tr></thead>
     <tbody>${blocks.map(b => `<tr><td class="lbl">${BLOCK_LABEL[b]}${b === 1 ? '<br><small>沒有趨勢（對照）</small>' : ''}</td>${list.map(c => cell(b, c)).join('')}</tr>`).join('')}</tbody></table></div>
     <p class="hint" style="margin-top:10px">怎麼看：每天打亂時，行情裡沒有趨勢，策略的報酬優勢應該消失；區塊越長、保留越多趨勢，策略越容易贏。真實台股在 1～6 個月的尺度上有趨勢延續，「約 3 個月」到「約半年」那兩列最接近現實。回撤比較小這件事在每一列都成立，是這個策略最穩的好處。</p></section>`;

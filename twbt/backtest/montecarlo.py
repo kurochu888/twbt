@@ -17,6 +17,7 @@ import pandas as pd
 
 from .costs import TaiwanCost
 from .lots import LOT, LotAccount
+from .metrics import longest_uw
 from .trend import ADD, EXIT, HOLD, RECOVER, TrendParams, signals
 
 TRADING_DAYS = 252
@@ -92,17 +93,18 @@ def _run_path(ret: np.ndarray, sig_ret: np.ndarray, p: TrendParams, warm: int,
     return eq, bh, trades
 
 
-def _stats(eq: np.ndarray, years: float, capital: float) -> tuple:
+def _stats(eq: np.ndarray, t: np.ndarray, capital: float) -> tuple:
+    """t = 每天累積經過的日曆年數（從 0 開始）。"""
     net = eq[-1] / capital                               # 以投入金額為基準（期初買進的手續費也算進去，跟網頁版一樣）
-    cagr = net ** (1 / years) - 1 if net > 0 else -1.0
+    cagr = net ** (1 / t[-1]) - 1 if net > 0 else -1.0
     mdd = float((eq / np.maximum.accumulate(eq) - 1).min())
-    return cagr, mdd
+    return (cagr, mdd, *longest_uw(eq, t))
 
 
 def monte_carlo(ret: pd.Series, sig_ret: pd.Series, params: TrendParams, *, n: int = 2000, years: float = 10,
                 block: float = 60, seed: int = 0, capital: float = 1_000_000,
                 cost: TaiwanCost | None = None, kind: str = "etf", px0: float = 100.0) -> pd.DataFrame:
-    """回傳每條路徑一列：策略與買進持有的年化、回撤、進出次數。px0 = 路徑起點的每股價格（建議用最新收盤）。"""
+    """回傳每條路徑一列：策略與買進持有的年化、回撤、最長套牢（年）、進出次數。px0 = 路徑起點的每股價格（建議用最新收盤）。"""
     cost = cost or TaiwanCost()
     from ..data.synthetic import year_frac
     r = ret.to_numpy(dtype=float)
@@ -118,11 +120,12 @@ def monte_carlo(ret: pd.Series, sig_ret: pd.Series, params: TrendParams, *, n: i
     for k in range(n):
         idx = bootstrap_indices(len(r), length, block, rng)
         eq, bh, trades = _run_path(r[idx], s[idx], params, warm, capital, cost, kind, px0)
-        yrs = dt[idx[warm:]].sum()                      # 這條路徑實際經過的日曆時間
-        sc, sm = _stats(eq, yrs, capital)
-        bc, bm = _stats(bh, yrs, capital)
-        rows.append((sc, sm, bc, bm, trades))
-    return pd.DataFrame(rows, columns=["策略年化", "策略回撤", "持有年化", "持有回撤", "進出次數"])
+        t = np.concatenate([[0.0], np.cumsum(dt[idx[warm:]])])   # 這條路徑實際經過的日曆時間
+        sc, sm, su, so = _stats(eq, t, capital)
+        bc, bm, bu, bo = _stats(bh, t, capital)
+        rows.append((sc, sm, su, so, bc, bm, bu, bo, trades))
+    return pd.DataFrame(rows, columns=["策略年化", "策略回撤", "策略最長套牢", "策略套牢未結束",
+                                       "持有年化", "持有回撤", "持有最長套牢", "持有套牢未結束", "進出次數"])
 
 
 def summarize_mc(df: pd.DataFrame, years: float = 10) -> dict:
@@ -144,5 +147,10 @@ def summarize_mc(df: pd.DataFrame, years: float = 10) -> dict:
         "策略回撤 5%（很差的情況）": float(df["策略回撤"].quantile(0.05)),
         "持有回撤 5%（很差的情況）": float(df["持有回撤"].quantile(0.05)),
         "回撤比較小的機率": float((df["策略回撤"] > df["持有回撤"]).mean()),
+        "策略最長套牢 中位數（年）": float(df["策略最長套牢"].median()),
+        "持有最長套牢 中位數（年）": float(df["持有最長套牢"].median()),
+        "策略最長套牢 95%（年）": float(df["策略最長套牢"].quantile(0.95)),
+        "持有最長套牢 95%（年）": float(df["持有最長套牢"].quantile(0.95)),
+        "套牢比較短的機率": float((df["策略最長套牢"] < df["持有最長套牢"]).mean()),
         "年均進出次數": float(df["進出次數"].mean() / years),
     }

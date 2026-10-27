@@ -35,6 +35,23 @@ class TestBootstrap(unittest.TestCase):
         self.assertTrue((df["策略回撤"] == 0).all() and (df["持有回撤"] == 0).all())
         self.assertTrue(np.allclose(df["持有年化"], (1.001 ** 365) ** (365.25 / 365) - 1, rtol=1e-5))
         self.assertTrue((df["策略年化"] <= df["持有年化"] + 1e-12).all())   # 晚一天進場，不可能比較多
+        self.assertTrue((df["持有最長套牢"] == 0).all() and not df["持有套牢未結束"].any())
+
+
+class TestLongestUnderwater(unittest.TestCase):
+    def test_same_as_underwater(self):
+        # 沒有日期的版本（蒙地卡羅用）跟有日期的 underwater() 結果一樣
+        from twbt.backtest.metrics import longest_uw, underwater
+        rng = np.random.default_rng(3)
+        for _ in range(200):
+            n = int(rng.integers(2, 60))
+            eq = np.round(100 * np.cumprod(1 + rng.normal(0, 0.05, n)), 0)    # 取整：常有一樣高的日子
+            days = np.cumsum(rng.integers(1, 4, n))
+            idx = pd.Timestamp("2000-01-01") + pd.to_timedelta(days, "D")
+            lg = underwater(pd.Series(eq, index=idx))["longest"]
+            y, op = longest_uw(eq, (days - days[0]) / 365.25)
+            self.assertAlmostEqual(y, lg["years"] if lg else 0.0)
+            self.assertEqual(op, bool(lg and lg["recovery"] is None))
 
 
 if __name__ == "__main__":

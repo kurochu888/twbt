@@ -46,7 +46,8 @@ def main():
                 s = summarize_mc(df, a.years)
                 rows.append({"標的": NAMES[code], "取樣來源": src, "區塊長度": f"{block} 天（{label}）", **s})
                 print(f"{code} {src} 區塊 {block:>3}：策略贏 {s['策略贏的機率']:.0%}，年化差中位數 {s['年化差 中位數']:+.1%}，"
-                      f"回撤中位數 {s['策略回撤 中位數']:.0%} vs {s['持有回撤 中位數']:.0%}", flush=True)
+                      f"回撤中位數 {s['策略回撤 中位數']:.0%} vs {s['持有回撤 中位數']:.0%}，"
+                      f"最長套牢中位數 {s['策略最長套牢 中位數（年）']:.1f} vs {s['持有最長套牢 中位數（年）']:.1f} 年", flush=True)
     pd.DataFrame(rows).to_csv(out / "summary.csv", index=False, encoding="utf-8-sig")
     print(f"\n已輸出 {out / 'summary.csv'}")
 
