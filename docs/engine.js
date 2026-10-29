@@ -492,10 +492,17 @@ const prepCache = new Map();
 export function trendPrep(data, code, opts, p) {
   const key = [code, opts.useSynthetic !== false, opts.tw50Excess !== false, opts.signalPrice || 'raw', JSON.stringify(p)].join('|');
   if (prepCache.has(key)) return prepCache.get(key);
+  const out = trendPrepRaw(data, code, opts, p);
+  if (prepCache.size >= 20) prepCache.delete(prepCache.keys().next().value);   // 最多留 20 份（改參數很多次也不會一直吃記憶體）
+  prepCache.set(key, out);
+  return out;
+}
+// 不進快取（參數掃描一次幾十組，放進去會把平常用的擠掉）
+function trendPrepRaw(data, code, opts, p) {
   const r = returnsFor(data, code, opts), sr = signalReturnsFor(data, code, opts);
   let first = -1;
   for (let i = 0; i < r.length; i++) if (!Number.isNaN(r[i])) { first = i; break; }
-  if (first < 1) { prepCache.set(key, null); return null; }
+  if (first < 1) return null;
   const i0 = first - 1, n = r.length - i0;
   const price = new Float64Array(n), spx = new Float64Array(n);
   price[0] = spx[0] = 1;
@@ -515,10 +522,7 @@ export function trendPrep(data, code, opts, p) {
   }
   const win = Math.max(p.maFast, p.maSlow);
   const minSi = pos.length >= win ? i0 + pos[win - 1] : Infinity;   // 均線第一次算得出來的那天
-  const out = { i0, minSi, price, act, status, layers };
-  if (prepCache.size >= 20) prepCache.delete(prepCache.keys().next().value);   // 最多留 20 份（改參數很多次也不會一直吃記憶體）
-  prepCache.set(key, out);
-  return out;
+  return { i0, minSi, price, act, status, layers };
 }
 
 function trendSim(data, code, prep, p, si, ei, opts, keepEvents) {
@@ -614,6 +618,152 @@ export function trendWindows(data, codes, wins, opts, custom) {
     }
   }
   return rows;
+}
+
+// ====================== 參數穩健性檢查 ======================
+// 跟 twbt/backtest/robust.py 同一套：兩個參數各取一排值（其他照目前設定），每一組從同一天開始各跑一條淨值，
+// 各段績效從這條淨值切出來（不含每段期初買、期末賣的成本）。
+export const ROBUST_GRIDS = {
+  exit: { label: '快線 × 出場乘數', names: ['maFast', 'exitBuffer'],
+    2: [[60, 80, 100, 120, 150, 180, 240], [0.85, 0.875, 0.90, 0.925, 0.95, 0.97]],
+    1: [[50, 70, 100, 130, 160, 200], [0.90, 0.925, 0.95, 0.97, 0.98, 1.0]] },
+  pyramid: { label: '接刀間距 × 層數', names: ['pyramidGap', 'pyramidLevels'],
+    2: [[0.05, 0.10, 0.15, 0.20, 0.25, 0.30], [1, 2, 3, 4]], 1: [[0.05, 0.10, 0.15, 0.20, 0.25, 0.30], [1, 2, 3, 4]] },
+  recover: { label: '轉回斜率 × 強反彈', names: ['recoverSlope', 'recoverStrong'],
+    2: [[1.0, 1.001, 1.002, 1.004, 1.006], [1.01, 1.02, 1.03, 1.05, 1.08, 1.12]],
+    1: [[1.0, 1.001, 1.002, 1.004, 1.006], [1.01, 1.02, 1.03, 1.05, 1.08, 1.12]] },
+};
+
+export function paramSweep(data, code, opts, custom, gridKey) {
+  const g = ROBUST_GRIDS[gridKey], lev = LEVERAGE[code] >= 2 ? 2 : 1;
+  const [xs, ys] = g[lev], names = g.names;
+  const base = trendParamsFor(code, custom);
+  const combos = xs.flatMap(x => ys.map(y => ({ [names[0]]: x, [names[1]]: y })));
+  const preps = combos.map(c => trendPrepRaw(data, code, opts, { ...base, ...c }));
+  if (preps.some(p => !p)) throw new Error(`${data.assets[code].name} 沒有資料`);
+  const n = data.days.length, si = Math.max(...preps.map(p => p.minSi)), ei = n - 1;
+  if (!Number.isFinite(si) || ei - si < 250) throw new Error(`${data.assets[code].name} 均線算得出來之後不到一年`);
+  const days = data.days.subarray(si, ei + 1);
+  const t = Float64Array.from(days, d => (d - days[0]) / 365.25);
+  const eq = [], trades = [];
+  combos.forEach((c, k) => {
+    const p = { ...base, ...c }, pr = preps[k];
+    eq.push(trendSim(data, code, pr, p, si, ei, opts, false).eq);
+    let m = 0; for (let j = si + 1 - pr.i0; j <= ei - pr.i0; j++) if (pr.act[j]) m++;
+    trades.push(m);
+  });
+  const def = combos.findIndex(c => names.every(k => Math.abs(base[k] - c[k]) <= 1e-8 + 1e-5 * Math.abs(c[k])));   // 同 np.isclose
+  return { code, gridKey, names, xs, ys, combos, base, si, ei, days, t, eq, trades, bh: bhPath(data, code, si, ei, opts).eq, def };
+}
+
+function swCagr(sw, eq, a, b) {
+  const net = eq[b] / eq[a];
+  return net > 0 ? net ** (1 / (sw.t[b] - sw.t[a])) - 1 : -1;
+}
+function swStats(sw, eq, a, b) {
+  const x = eq.subarray(a, b + 1);
+  let peak = x[0], mdd = 0;
+  for (const v of x) { if (v > peak) peak = v; const d = v / peak - 1; if (d < mdd) mdd = d; }
+  const cagr = swCagr(sw, eq, a, b);
+  return { cagr, mdd, calmar: mdd < 0 ? cagr / -mdd : NaN, uw: longestUw(x, sw.t.subarray(a, b + 1)).uw };
+}
+// 起訖日（ISO，可省略）→ 陣列位置，同 robust.py 的 _pos()
+function swPos(sw, startIso, endIso) {
+  const a = startIso ? lowerBound(sw.days, isoToDay(startIso)) : 0;
+  const b = endIso ? lowerBound(sw.days, isoToDay(endIso) + 1) - 1 : sw.days.length - 1;
+  if (b - a < 20) throw new Error(`${startIso ?? ''} ~ ${endIso ?? ''} 太短`);
+  return [a, b];
+}
+function swRoll(sw, a, b, years) {
+  const L = Math.round(years * 12), out = [];
+  const t0 = new Date(sw.days[a] * DAY_MS);
+  for (let s = Date.UTC(t0.getUTCFullYear(), t0.getUTCMonth(), 1) / DAY_MS; addMonths(s, L) <= sw.days[b]; s = addMonths(s, 1)) {
+    const i = Math.max(a, lowerBound(sw.days, s)), j = lowerBound(sw.days, addMonths(s, L) + 1) - 1;
+    if (j - i >= 20) out.push([i, j]);
+  }
+  return out;
+}
+
+// 每組一列：年化、最大回撤、報酬回撤比、最長套牢、年化差；rollYears：這段期間所有 N 年區間贏買進持有的比例、年化差中位數、最差的 N 年
+export function sweepTable(sw, startIso, endIso, rollYears = 10) {
+  const [a, b] = swPos(sw, startIso, endIso);
+  const wins = rollYears ? swRoll(sw, a, b, rollYears) : [];
+  const bh = swStats(sw, sw.bh, a, b);
+  const bhRoll = wins.map(([s, e]) => swCagr(sw, sw.bh, s, e));
+  const full = !startIso && !endIso;
+  const rows = sw.combos.map((c, i) => {
+    const r = { ...c, ...swStats(sw, sw.eq[i], a, b), isDef: i === sw.def };
+    r.diff = r.cagr - bh.cagr;
+    if (full) r.trades = sw.trades[i];
+    if (wins.length) {
+      const st = wins.map(([s, e]) => swCagr(sw, sw.eq[i], s, e)), d = st.map((v, k) => v - bhRoll[k]);
+      r.rollWin = d.filter(v => v > 0).length / d.length;
+      r.rollDiff = quantile([...d].sort((x, y) => x - y), 0.5);
+      r.rollWorst = Math.min(...st);
+    }
+    return r;
+  });
+  return { rows, start: dayToIso(sw.days[a]), end: dayToIso(sw.days[b]), bh, windows: wins.length, a, b };
+}
+
+const argmax = v => { let k = -1; v.forEach((x, i) => { if (!Number.isNaN(x) && (k < 0 || x > v[k])) k = i; }); return k; };
+function ranks(v) {              // 由大到小排名，一樣大取平均、NaN 不排（同 pandas rank(ascending=False)）
+  const idx = v.map((x, i) => i).filter(i => !Number.isNaN(v[i])).sort((i, j) => v[j] - v[i]), out = new Array(v.length).fill(NaN);
+  for (let s = 0; s < idx.length;) {
+    let e = s; while (e + 1 < idx.length && v[idx[e + 1]] === v[idx[s]]) e++;
+    for (let k = s; k <= e; k++) out[idx[k]] = (s + e) / 2 + 1;
+    s = e + 1;
+  }
+  return out;
+}
+function pearson(x0, y0) {       // 只用兩邊都有數字的組合（同 pandas corr）
+  const k = x0.map((_, i) => i).filter(i => !Number.isNaN(x0[i]) && !Number.isNaN(y0[i]));
+  const x = k.map(i => x0[i]), y = k.map(i => y0[i]);
+  const mx = mean(x), my = mean(y);
+  let sxy = 0, sx = 0, sy = 0;
+  for (let i = 0; i < x.length; i++) { sxy += (x[i] - mx) * (y[i] - my); sx += (x[i] - mx) ** 2; sy += (y[i] - my) ** 2; }
+  return sxy / Math.sqrt(sx * sy);
+}
+
+// 樣本內外：分界前一天以前挑參數、分界以後驗證
+export function sweepSplit(sw, splitIso, objective = 'cagr') {
+  const ins = sweepTable(sw, null, dayToIso(isoToDay(splitIso) - 1), 0), oos = sweepTable(sw, splitIso, null, 0);
+  const vin = ins.rows.map(r => r[objective]), vout = oos.rows.map(r => r[objective]);
+  const rIn = ranks(vin), rOut = ranks(vout), best = argmax(vin);
+  return { ins, oos, objective, corr: pearson(rIn, rOut), best, bestRank: Math.trunc(rOut[best]),
+    defRank: sw.def >= 0 ? Math.trunc(rOut[sw.def]) : null, rIn, rOut };
+}
+
+// walk-forward：從 firstIso 起每 stepYears 年用之前全部歷史重挑一次參數，接下來 stepYears 年照用
+export function sweepWalkForward(sw, firstIso, stepYears = 5, objective = 'cagr') {
+  const d = sw.days, n = d.length, t0 = isoToDay(firstIso);
+  if (t0 <= addMonths(d[0], 36)) throw new Error(`第一次挑參數前至少要 3 年歷史（策略從 ${dayToIso(d[0])} 開始）`);
+  const step = Math.round(stepYears * 12), a0 = lowerBound(d, t0);
+  const wf = new Float64Array(n - a0), blocks = [];
+  wf[0] = 1;
+  let cur = t0;
+  for (;;) {
+    const a = lowerBound(d, cur);
+    if (a >= n - 1) break;
+    const b = Math.min(n - 1, lowerBound(d, addMonths(cur, step)));
+    const ins = sweepTable(sw, null, dayToIso(d[a - 1]), 0);
+    const k = argmax(ins.rows.map(r => r[objective]));
+    for (let i = a; i <= b; i++) wf[i - a0] = wf[a - a0] * sw.eq[k][i] / sw.eq[k][a];
+    blocks.push({ start: dayToIso(d[a]), end: dayToIso(d[b]), k, combo: sw.combos[k], isDef: k === sw.def,
+      cagr: swCagr(sw, sw.eq[k], a, b), defCagr: sw.def >= 0 ? swCagr(sw, sw.eq[sw.def], a, b) : NaN, bhCagr: swCagr(sw, sw.bh, a, b) });
+    if (b >= n - 1) break;
+    cur = d[b];
+  }
+  const norm = eq => Float64Array.from(eq.subarray(a0), v => v / eq[a0]);
+  const curves = { wf, ...(sw.def >= 0 ? { def: norm(sw.eq[sw.def]) } : {}), bh: norm(sw.bh) };
+  const tt = sw.t.subarray(a0), summary = {};
+  for (const [k, x] of Object.entries(curves)) {
+    let peak = x[0], mdd = 0;
+    for (const v of x) { if (v > peak) peak = v; const dd = v / peak - 1; if (dd < mdd) mdd = dd; }
+    const cagr = x[x.length - 1] ** (1 / (tt[tt.length - 1] - tt[0])) - 1;
+    summary[k] = { cagr, mdd, calmar: mdd < 0 ? cagr / -mdd : NaN, uw: longestUw(x, tt).uw };
+  }
+  return { blocks, curves, days: d.subarray(a0), summary };
 }
 
 // ====================== 蒙地卡羅（區塊自助抽樣） ======================

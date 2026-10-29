@@ -1,10 +1,10 @@
 // 介面：讀設定 → 呼叫 engine.js 計算 → 畫結果
-import * as E from './engine.js?v=34b224aaab';
-import { LineChart, ScatterChart } from './plot.js?v=34b224aaab';
+import * as E from './engine.js?v=937340c2f3';
+import { LineChart, ScatterChart } from './plot.js?v=937340c2f3';
 
 // 版本號：tools/stamp_version.py 自動蓋上（日期 · 程式內容的 hash，跟 finance-app 一樣不手動編號）
-const BUILD_HASH = '34b224aaab';
-const BUILD_DATE = '2026-10-27';
+const BUILD_HASH = '937340c2f3';
+const BUILD_DATE = '2026-10-29';
 
 const ORDER = ['TAIEX', '0050', '00631L', '00675L'];
 const LABEL = { TAIEX: '大盤（含息）', '0050': '0050', '00631L': '00631L 台灣50正2', '00675L': '00675L 加權正2' };
@@ -21,6 +21,7 @@ const state = {
   strategy: 'bh', trendCustom: { 1: {}, 2: {} }, signalPrice: 'raw', chartAsset: '00631L',
   mcN: 1000, mcYears: 10, mcSeed: 1, mcBlock: 120, mcMetric: 'cagr',
   rbWeights: { '0050': 0, '00631L': 50, '00675L': 0, CASH: 50 }, rbFreq: 'Q', rbBand: 5, rbCash: 1, rbTrend: false,
+  robAsset: '00631L', robGrid: 'exit', robObj: 'cagr', robSplit: '2010-01-01', robWfStart: '2000-01-01', robWfStep: 5, robMetric: 'cagr',
 };
 const DEFAULTS = { ...state, assets: new Set(ORDER), rbWeights: { ...state.rbWeights } };
 
@@ -104,11 +105,15 @@ function sanitize() {
   num('rollYears', 1, 30, true); num('rndN', 10, 5000, true); num('rndMin', 0.5, 30); num('rndMax', 0.5, 30); num('seed', -1e9, 1e9, true);
   num('mcN', 100, MC_MAX, true); num('mcYears', 1, 30, true); num('mcSeed', -1e9, 1e9, true); pick('mcBlock', [1, 20, 60, 120, 250]);
   num('rbBand', 0, 50); num('rbCash', 0, 10);
-  pick('strategy', ['bh', 'trend', 'rebal']); pick('mode', ['period', 'rolling', 'random', 'mc']);
+  pick('strategy', ['bh', 'trend', 'rebal']); pick('mode', ['period', 'rolling', 'random', 'mc', 'robust']);
+  pick('robAsset', ['0050', '00631L', '00675L']); pick('robGrid', Object.keys(E.ROBUST_GRIDS)); pick('robObj', ['cagr', 'calmar']);
+  pick('robMetric', Object.keys(ROB_METRICS)); num('robWfStep', 1, 10, true);
   pick('signalPrice', ['raw', 'adjusted']); pick('metric', Object.keys(METRICS)); pick('mcMetric', ['cagr', 'mdd', 'total']);
   pick('rbFreq', ['none', 'M', 'Q', 'H', 'Y']); pick('chartAsset', ORDER);
   const okDate = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(v));
   if (!okDate(state.start)) state.start = D.start;
+  if (!okDate(state.robSplit)) state.robSplit = D.robSplit;
+  if (!okDate(state.robWfStart)) state.robWfStart = D.robWfStart;
   if (state.end !== '' && !okDate(state.end)) state.end = D.end;
   state.assets = new Set([...state.assets].filter(c => ORDER.includes(c)));
   if (!state.assets.size) state.assets = new Set(ORDER);
@@ -214,6 +219,19 @@ function buildControls() {
   $('mcBlock').value = String(state.mcBlock);
   $('mcBlock').addEventListener('change', () => { state.mcBlock = +$('mcBlock').value; save(); run(); });
   $('mcRun').addEventListener('click', () => runMC(false));
+
+  // 參數穩健性
+  for (const k of ['robAsset', 'robGrid', 'robObj']) {
+    $(k).value = state[k];
+    $(k).addEventListener('change', () => { state[k] = $(k).value; changed(); });
+  }
+  for (const k of ['robSplit', 'robWfStart']) {
+    $(k).value = state[k];
+    $(k).addEventListener('change', () => { if (okDate($(k).value)) { state[k] = $(k).value; changed(); } else $(k).value = state[k]; });
+  }
+  $('robWfStep').value = state.robWfStep;
+  $('robWfStep').addEventListener('input', () => { const v = clampNum($('robWfStep').value, 1, 10); if (v !== null) { state.robWfStep = Math.round(v); changed(); } });
+  $('robWfStep').addEventListener('change', () => { $('robWfStep').value = state.robWfStep; });
   $('mcCompare').addEventListener('click', () => runMC(true));
 
   document.querySelectorAll('.tabs button').forEach(b => b.addEventListener('click', () => {
@@ -252,7 +270,8 @@ function syncStrategyUI() {
   $('stratName').textContent = trend ? '均線趨勢（接刀）' : rebal ? '再平衡' : '買進持有';
   $('strategySeg').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', b.dataset.s === state.strategy));
   $('mcTab').hidden = !(trend || rebal);
-  if (!(trend || rebal) && state.mode === 'mc') { state.mode = 'period'; showMode(); }
+  $('robustTab').hidden = !trend;
+  if ((!(trend || rebal) && state.mode === 'mc') || (!trend && state.mode === 'robust')) { state.mode = 'period'; showMode(); }
   $('trendCard').hidden = !(trend || (rebal && state.rbTrend));
   $('rebalCard').hidden = !rebal;
   $('assetsField').hidden = rebal;
@@ -520,6 +539,7 @@ function renderRebalMulti(cfg, wins, title) {
 
 function runTrend() {
   if (state.mode === 'mc') { if (mcRunning && mcRunning.key === mcKey(mcRunning.compare)) return; mcToken++; renderMCIdle(); return; }
+  if (state.mode === 'robust') return renderRobust();
   if (!codes().length) { destroyCharts(); $('results').innerHTML = '<div class="warn">請至少選一檔 0050、00631L 或 00675L（大盤不能交易，不跑策略）。</div>'; return; }
   if (state.mode === 'period') {
     renderTrendPeriod(E.trendPeriod(DATA, codes(), state.start, state.end, opts(), state.trendCustom));
@@ -964,6 +984,138 @@ function renderTrendMulti(rows, title) {
       pts: rows.filter(r => r.code === c).map(r => ({ x: E.isoToDay(r.start) * DAY_MS, y: (r[m] - r[bhKey[m]]) * 100, label: `${r.start} ～ ${r.end}` })),
     })),
     yFmt: v => Math.round(v), tipFmt: v => (v > 0 ? '+' : '') + v.toFixed(1) + ' 點', ariaLabel: '策略減買進持有散布圖',
+  });
+}
+
+// ---------- 參數穩健性 ----------
+const PNAME = { maFast: '快線', maSlow: '慢線', exitBuffer: '出場乘數', pyramidGap: '接刀間距', pyramidLevels: '接刀層數', recoverSlope: '轉回斜率', recoverStrong: '強反彈' };
+// better：1 = 越大越好、−1 = 越小越好（熱力圖顏色越深越好）
+const ROB_METRICS = {
+  cagr: { label: '年化', fmt: v => pct(v, 1), better: 1 },
+  mdd: { label: '最大回撤', fmt: v => pct(v, 0), better: 1 },
+  calmar: { label: '報酬回撤比', fmt: num2, better: 1 },
+  rollWin: { label: '10 年贏持有', fmt: v => pct(v, 0), better: 1 },
+  uw: { label: '最長套牢', fmt: dur, better: -1 },
+};
+const OBJ_LABEL = { cagr: '年化', calmar: '報酬回撤比' };
+const comboText = (sw, c) => sw.names.map(k => `${PNAME[k]} ${c[k]}`).join('、');
+const objFmt = (obj, v) => obj === 'cagr' ? pct(v, 1) : num2(v);
+// 分界、起點不合理時自動調整（同 scripts/robustness.py）：樣本內外兩段都要至少 3 年；walk-forward 第一次挑之前要至少 3 年
+function robDates(sw) {
+  const d0 = sw.days[0], d1 = sw.days[sw.days.length - 1], notes = [];
+  const y0 = new Date(d0 * DAY_MS).getUTCFullYear();
+  let split = state.robSplit, ws = state.robWfStart;
+  if (!(E.isoToDay(split) >= E.addMonths(d0, 36) && E.isoToDay(split) <= E.addMonths(d1, -36))) {
+    split = `${new Date((d0 + (d1 - d0) / 2) * DAY_MS).getUTCFullYear()}-01-01`;
+    notes.push(`樣本內外分界改成 ${split}`);
+  }
+  const minWs = `${y0 + 4}-01-01`;
+  if (ws < minWs || E.isoToDay(ws) > E.addMonths(d1, -12)) { ws = minWs; notes.push(`walk-forward 改從 ${ws} 開始`); }
+  return { split, ws, notes };
+}
+
+function renderRobust() {
+  destroyCharts();
+  const code = state.robAsset, obj = state.robObj;
+  const sw = E.paramSweep(DATA, code, opts(), state.trendCustom, state.robGrid);
+  const full = E.sweepTable(sw);
+  const { split, ws, notes } = robDates(sw);
+  const sp = E.sweepSplit(sw, split, obj);
+  const wf = E.sweepWalkForward(sw, ws, state.robWfStep, obj);
+  const rows = full.rows, N = rows.length, def = sw.def;
+  const g = E.ROBUST_GRIDS[state.robGrid];
+  const fixed = Object.keys(PNAME).filter(k => !sw.names.includes(k)).map(k => `${PNAME[k]} ${sw.base[k]}`).join('、');
+  const rankFull = rows.map(r => r[obj]);
+  const defRank = def >= 0 ? 1 + rankFull.filter(v => v > rankFull[def]).length : null;
+  const beat = rows.filter(r => r.diff > 0).length;
+  const corr = sp.corr;
+  const verdict = !Number.isFinite(corr) ? '－' : corr >= 0.5 ? '一致：前段好的參數後段也好' : corr >= 0.2 ? '弱：有一點參考價值' : '沒關係或相反：用歷史挑這兩個參數沒有用';
+  const c = color(code);
+  let html = '';
+  if (notes.length) html += `<div class="warn">策略從 ${full.start} 開始，${notes.join('；')}。</div>`;
+  html += `<section class="card"><h3>${LABEL[code]} · ${g.label}（${N} 組）</h3>
+    <p class="hint">${full.start} ～ ${full.end}，每組都從同一天開始。其他參數照你的設定：${esc(fixed)}。${def >= 0 ? `你的設定（${esc(comboText(sw, sw.combos[def]))}）在格子上標 ★。` : '<b>你的設定不在格子上</b>，排名與對照只看得到格子裡的組合。'}</p>
+    <div class="kpis">
+      <div class="kpi" style="--c:${c}"><div class="t">全期年化贏買進持有</div><div class="v">${beat} / ${N}</div><div class="s">買進持有年化 ${pct(full.bh.cagr, 1)}、回撤 ${pct(full.bh.mdd, 0)}</div></div>
+      ${def >= 0 ? `<div class="kpi" style="--c:${c}"><div class="t">你的設定全期${OBJ_LABEL[obj]}排第</div><div class="v">${defRank} / ${N}</div><div class="s">${OBJ_LABEL[obj]} ${objFmt(obj, rows[def][obj])}；最好的 ${objFmt(obj, Math.max(...rankFull.filter(Number.isFinite)))}</div></div>` : ''}
+      <div class="kpi" style="--c:${c}"><div class="t">樣本內外排名相關係數</div><div class="v ${corr < 0.2 ? 'neg' : ''}">${Number.isFinite(corr) ? (corr > 0 ? '+' : '') + corr.toFixed(2) : '－'}</div><div class="s">${verdict}</div></div>
+      <div class="kpi" style="--c:${c}"><div class="t">walk-forward 年化</div><div class="v">${pct(wf.summary.wf.cagr, 1)}</div><div class="s">${wf.summary.def ? `一直用你的設定 ${pct(wf.summary.def.cagr, 1)}、` : ''}買進持有 ${pct(wf.summary.bh.cagr, 1)}（${ws} 起）</div></div>
+    </div></section>`;
+
+  // 熱力圖
+  const M = ROB_METRICS[state.robMetric];
+  const vals = rows.map(r => r[state.robMetric]).filter(Number.isFinite);
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  const shade = v => { if (!Number.isFinite(v) || hi === lo) return 8; const f = (v - lo) / (hi - lo); return Math.round(6 + 40 * (M.better > 0 ? f : 1 - f)); };
+  const tip = r => [comboText(sw, r), `年化 ${pct(r.cagr, 1)}（比持有 ${pct(r.diff, 1, true)}）`, `最大回撤 ${pct(r.mdd, 0)}`, `報酬回撤比 ${num2(r.calmar)}`,
+    `最長套牢 ${dur(r.uw)}`, `10 年贏持有 ${pct(r.rollWin, 0)}`, `最差 10 年年化 ${pct(r.rollWorst, 1)}`, `進出 ${r.trades} 次`].join('\n');
+  const best = rows.reduce((k, r, i) => (Number.isFinite(r[obj]) && (k < 0 || r[obj] > rows[k][obj]) ? i : k), -1);
+  const nb = i => { const xi = Math.floor(i / sw.ys.length), yi = i % sw.ys.length, out = [];
+    for (const [dx, dy] of [[0, 0], [-1, 0], [1, 0], [0, -1], [0, 1]]) { const x = xi + dx, y = yi + dy;
+      if (x >= 0 && x < sw.xs.length && y >= 0 && y < sw.ys.length) out.push(rows[x * sw.ys.length + y][obj]); }
+    const f = out.filter(Number.isFinite); return f.reduce((a, b) => a + b, 0) / f.length; };
+  html += `<section class="card"><div class="chart-head"><h3>熱力圖：每一格是一組參數</h3>
+      <div class="seg" id="robMetricSeg">${Object.entries(ROB_METRICS).map(([k, m]) => `<button type="button" data-m="${k}" aria-pressed="${k === state.robMetric}">${m.label}</button>`).join('')}</div></div>
+    <div class="tbl-wrap"><table class="heat"><thead><tr><th>${PNAME[sw.names[0]]} ＼ ${PNAME[sw.names[1]]}</th>${sw.ys.map(y => `<th>${y}</th>`).join('')}</tr></thead><tbody>
+    ${sw.xs.map((x, xi) => `<tr><td class="lbl">${x}</td>${sw.ys.map((y, yi) => { const i = xi * sw.ys.length + yi, r = rows[i];
+      return `<td data-i="${i}" class="${i === def ? 'me' : ''}" style="background:color-mix(in srgb, var(--accent) ${shade(r[state.robMetric])}%, transparent)" title="${esc(tip(r))}">${M.fmt(r[state.robMetric])}${i === def ? ' ★' : ''}</td>`; }).join('')}</tr>`).join('')}
+    </tbody></table></div>
+    <p class="hint" id="robCell" style="white-space:pre-line">點一格看那組的所有數字。</p>
+    <p class="hint">顏色越深越好（${M.better > 0 ? '越大越深' : '越短越深'}）。好的參數附近應該是一片顏色差不多的高原，只有一格特別深 = 尖峰，八成是運氣。</p>
+    ${best >= 0 ? `<p class="hint">全期${OBJ_LABEL[obj]}最高：${esc(comboText(sw, rows[best]))} = ${objFmt(obj, rows[best][obj])}，跟上下左右鄰居平均 ${objFmt(obj, nb(best))}${def >= 0 ? `；你的設定 ${objFmt(obj, rows[def][obj])}，鄰居平均 ${objFmt(obj, nb(def))}` : ''}。</p>` : ''}
+    <p class="hint">「10 年贏持有」= ${full.windows} 個 10 年區間（每月一個起點）裡，策略年化比買進持有高的比例${full.windows < 36 ? '（區間太少，參考就好）' : ''}。</p></section>`;
+
+  // 樣本內外
+  const med = (t, k) => E.quantile(t.rows.map(r => r[k]).filter(Number.isFinite).sort((a, b) => a - b), 0.5);
+  const spRow = (name, i, cls = '') => { const a = sp.ins.rows[i], b = sp.oos.rows[i];
+    return `<tr class="${cls}"><td>${name}<br><small style="color:var(--muted)">${esc(comboText(sw, a))}</small></td><td>${objFmt(obj, a[obj])}</td><td>${pct(b.cagr, 1)}</td><td>${pct(b.mdd, 0)}</td><td>${num2(b.calmar)}</td><td>${Math.trunc(sp.rOut[i])} / ${N}</td></tr>`; };
+  html += `<section class="card"><h3>樣本內外：前段挑、後段驗證</h3>
+    <p class="hint">樣本內 ${sp.ins.start} ～ ${sp.ins.end}，樣本外 ${sp.oos.start} ～ ${sp.oos.end}，用${OBJ_LABEL[obj]}挑。排名相關係數 <b>${Number.isFinite(corr) ? corr.toFixed(2) : '－'}</b>：${verdict}。</p>
+    <div class="tbl-wrap"><table><thead><tr><th></th><th>樣本內${OBJ_LABEL[obj]}</th><th>樣本外年化</th><th>回撤</th><th>報酬回撤比</th><th>樣本外排名</th></tr></thead><tbody>
+      ${spRow('樣本內最好的', sp.best, 'em')}
+      ${def >= 0 && def !== sp.best ? spRow('你的設定', def) : ''}
+      <tr><td>所有組合中位數</td><td>${objFmt(obj, med(sp.ins, obj))}</td><td>${pct(med(sp.oos, 'cagr'), 1)}</td><td>${pct(med(sp.oos, 'mdd'), 0)}</td><td>${num2(med(sp.oos, 'calmar'))}</td><td></td></tr>
+      <tr><td>買進持有</td><td>${objFmt(obj, sp.ins.bh[obj])}</td><td>${pct(sp.oos.bh.cagr, 1)}</td><td>${pct(sp.oos.bh.mdd, 0)}</td><td>${num2(sp.oos.bh.calmar)}</td><td></td></tr>
+    </tbody></table></div>
+    <div class="chart-box" id="cRobSplit" style="margin-top:12px"></div>
+    <div class="legend"><span><i style="background:${c}"></i>每一組參數</span>${def >= 0 ? `<span><i style="background:${css('--text')}"></i>你的設定</span>` : ''}<span><i style="background:${css('--c-alt')}"></i>樣本內最好的</span></div>
+    <p class="hint">橫軸 = 樣本內${OBJ_LABEL[obj]}、縱軸 = 樣本外${OBJ_LABEL[obj]}。點由左下往右上排 = 前段好的後段也好；散成一團或往右下 = 前段挑的沒用。${def >= 0 ? '預設參數是看過 2010 年後的行情才設的，它在樣本外表現好不算真正的驗證，walk-forward 才公平。' : ''}</p></section>`;
+
+  // walk-forward
+  const S = wf.summary;
+  const sumRow = (name, s) => `<tr><td>${name}</td><td>${pct(s.cagr, 1)}</td><td>${pct(s.mdd, 0)}</td><td>${num2(s.calmar)}</td><td>${dur(s.uw)}</td></tr>`;
+  html += `<section class="card"><h3>walk-forward：每 ${state.robWfStep} 年用之前的歷史重挑</h3>
+    <p class="hint">每段開始那天，用「到前一天為止的全部歷史」挑${OBJ_LABEL[obj]}最高的組合，接下來 ${state.robWfStep} 年照用。這是當時的人做得到的最佳化。</p>
+    <div class="chart-box" id="cRobWf"></div>
+    <div class="legend"><span><i style="background:${css('--c-alt')}"></i>walk-forward</span>${S.def ? `<span><i style="background:${c}"></i>一直用你的設定</span>` : ''}<span><i style="background:${css('--muted')}"></i>買進持有</span></div>
+    <div class="tbl-wrap" style="margin-top:10px"><table><thead><tr><th></th><th>年化</th><th>最大回撤</th><th>報酬回撤比</th><th>最長套牢</th></tr></thead><tbody>
+      ${sumRow('walk-forward', S.wf)}${S.def ? sumRow('一直用你的設定', S.def) : ''}${sumRow('買進持有', S.bh)}</tbody></table></div>
+    <div class="tbl-wrap" style="margin-top:10px"><table><thead><tr><th>期間</th><th>選了</th><th>這段年化</th><th>你的設定</th><th>買進持有</th></tr></thead><tbody>
+      ${wf.blocks.map(b => `<tr><td>${b.start}<br><small style="color:var(--muted)">～ ${b.end}</small></td><td>${esc(comboText(sw, b.combo))}${b.isDef ? ' ★' : ''}</td><td class="${cls(b.cagr)}">${pct(b.cagr, 1, true)}</td><td>${pct(b.defCagr, 1, true)}</td><td>${pct(b.bhCagr, 1, true)}</td></tr>`).join('')}
+    </tbody></table></div>
+    <p class="hint">各段績效從各組參數同一條淨值切出來，不含每段期初買、期末賣的成本；換參數那天也不算調整部位的成本。</p></section>`;
+
+  $('results').innerHTML = html;
+  $('robMetricSeg').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; state.robMetric = b.dataset.m; save(); renderRobust(); });
+  document.querySelector('table.heat').addEventListener('click', e => { const td = e.target.closest('td[data-i]'); if (td) $('robCell').textContent = tip(rows[+td.dataset.i]); });
+
+  const sc = v => obj === 'cagr' ? v * 100 : v, scFmt = v => obj === 'cagr' ? +v.toFixed(1) + '%' : +v.toFixed(2) + '';
+  const pt = i => ({ x: sc(sp.ins.rows[i][obj]), y: sc(sp.oos.rows[i][obj]), label: `${comboText(sw, sw.combos[i])}；樣本內 ${objFmt(obj, sp.ins.rows[i][obj])}` });
+  const okPt = p => Number.isFinite(p.x) && Number.isFinite(p.y);
+  charts.robSplit = new ScatterChart($('cRobSplit'), {
+    series: [{ name: '參數組合', color: c, pts: sw.combos.map((_, i) => pt(i)).filter(okPt) },
+      ...(def >= 0 ? [{ name: '你的設定', color: css('--text'), pts: [pt(def)].filter(okPt) }] : []),
+      { name: '樣本內最好的', color: css('--c-alt'), pts: [pt(sp.best)].filter(okPt) }],
+    xNumeric: true, free: true, xFmt: scFmt, yFmt: scFmt, xLabel: `樣本內${OBJ_LABEL[obj]} →`, yLabel: `↑ 樣本外${OBJ_LABEL[obj]}`,
+    tipFmt: v => obj === 'cagr' ? v.toFixed(1) + '%' : v.toFixed(2), ariaLabel: '樣本內與樣本外績效散布圖',
+  });
+  const x = Float64Array.from(wf.days, d => d * DAY_MS);
+  charts.robWf = new LineChart($('cRobWf'), {
+    series: [{ name: 'walk-forward', color: css('--c-alt'), x, y: wf.curves.wf },
+      ...(wf.curves.def ? [{ name: '你的設定', color: c, x, y: wf.curves.def }] : []),
+      { name: '買進持有', color: css('--muted'), x, y: wf.curves.bh }],
+    log: true, yFmt: v => (v >= 10 ? v.toFixed(0) : v >= 1 ? v.toFixed(1) : v.toFixed(2)).replace(/\.0$/, '') + '×',
+    tipFmt: v => v.toFixed(2) + ' 倍', ariaLabel: 'walk-forward 資產成長圖',
   });
 }
 

@@ -11,7 +11,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=34b224aaab">
+<link rel="stylesheet" href="style.css?v=937340c2f3">
 </head>
 <body>
 <button class="update-banner" id="updateBanner" type="button" hidden>🔄 有新版本，點這裡更新</button>
@@ -119,6 +119,7 @@
     <button role="tab" data-mode="rolling" aria-selected="false">滾動區間</button>
     <button role="tab" data-mode="random" aria-selected="false">隨機區間</button>
     <button role="tab" data-mode="mc" aria-selected="false" id="mcTab" hidden>蒙地卡羅</button>
+    <button role="tab" data-mode="robust" aria-selected="false" id="robustTab" hidden>參數穩健性</button>
   </nav>
 
   <section class="card" id="panel-period" data-panel="period">
@@ -170,6 +171,26 @@
     <p class="hint">取樣用的歷史跟著上面「使用上市前的模擬資料」：開著 = 1990 年起，關掉 = 只用上市後的真實資料（期間短，而且大多是多頭，結果會偏樂觀）。真實台股在 1～6 個月的尺度上有趨勢延續，「約 3 個月」到「約半年」最接近現實。</p>
   </section>
 
+  <section class="card" id="panel-robust" data-panel="robust" hidden>
+    <p class="hint" style="margin:0 0 12px">均線參數是看過去行情設的，可能只是剛好貼合過去。這裡把兩個參數各換一排值、其他照上面的設定，每一組都從同一天開始跑到最新，看你的設定附近是不是一片差不多好的「高原」，以及用前一段歷史挑參數，後一段還好不好。</p>
+    <div class="grid2">
+      <label class="field"><span class="label">標的</span>
+        <select id="robAsset"><option value="00631L">00631L 台灣50正2</option><option value="00675L">00675L 加權正2</option><option value="0050">0050</option></select></label>
+      <label class="field"><span class="label">掃描哪兩個參數</span>
+        <select id="robGrid"><option value="exit">快線 × 出場乘數</option><option value="pyramid">接刀間距 × 層數</option><option value="recover">轉回斜率 × 強反彈</option></select></label>
+    </div>
+    <div class="grid2">
+      <label class="field"><span class="label">挑參數看什麼</span>
+        <select id="robObj"><option value="cagr">年化報酬最高</option><option value="calmar">報酬回撤比最高（年化 ÷ 最大回撤）</option></select></label>
+      <label class="field"><span class="label">樣本內外分界</span><input id="robSplit" type="date" value="2010-01-01"></label>
+    </div>
+    <div class="grid2">
+      <label class="field"><span class="label">walk-forward 起點</span><input id="robWfStart" type="date" value="2000-01-01"></label>
+      <label class="field"><span class="label">每幾年重挑一次</span><input id="robWfStep" type="number" min="1" max="10" step="1" value="5"></label>
+    </div>
+    <p class="hint">分界、起點太早或太晚（兩段都要至少 3 年）會自動調整，結果上方會註明。跟著上面「使用上市前的模擬資料」：關掉時 00631L 只有約 11 年，結果只能參考。</p>
+  </section>
+
   <div id="status" class="status" role="status" aria-live="polite"></div>
   <div id="results"></div>
 
@@ -181,7 +202,7 @@
       <summary>1. 快速上手（三步驟）</summary>
       <ol>
         <li><b>選策略</b>：買進持有（買了就放著）、均線趨勢（照均線出場／接刀）、再平衡（固定比例定期調回）。</li>
-        <li><b>選回測方式</b>：自訂區間（看一段特定期間）、滾動區間（同樣長度的所有期間都跑一遍）、隨機區間（隨機抽很多段）、蒙地卡羅（用歷史拼出沒發生過的行情）。</li>
+        <li><b>選回測方式</b>：自訂區間（看一段特定期間）、滾動區間（同樣長度的所有期間都跑一遍）、隨機區間（隨機抽很多段）、蒙地卡羅（用歷史拼出沒發生過的行情）、參數穩健性（均線參數換一換結果差多少）。</li>
         <li><b>看結果</b>：改任何設定都會自動重算（蒙地卡羅除外，要按「開始模擬」）。結果在設定下方，圖可以用手指按住看每一天的數字。</li>
       </ol>
       <p>最上方標題下面的日期 = 資料最後更新到哪一天。每個交易日台灣時間下午 4 點多自動更新；若看不到最新資料，重新整理網頁。</p>
@@ -279,7 +300,18 @@
     </details>
 
     <details>
-      <summary>7. 常見問題與注意事項</summary>
+      <summary>7. 參數穩健性（均線策略才有）</summary>
+      <p>回答「均線參數是真的有效，還是剛好貼合過去」。所有參數組合都從同一天開始（均線最長的那組算得出來的那天），跑到最新一天，扣手續費與證交稅、整張交易。各段的績效從同一條淨值切出來，不含每段期初買、期末賣的成本。</p>
+      <dl class="doc">
+        <dt>掃描哪兩個參數</dt><dd>快線 × 出場乘數、接刀間距 × 層數、轉回斜率 × 強反彈，三選一；沒在掃的參數照「均線趨勢策略」卡片的設定。你的設定剛好在格子上時會標 ★。</dd>
+        <dt>熱力圖</dt><dd>每一格是一組參數。顏色越深越好（年化、報酬回撤比、贏持有比例越高越深；回撤越小、套牢越短越深）。好的參數附近應該是一片顏色差不多的「高原」；只有一格特別深、旁邊都很淺 = 尖峰，八成是運氣。「10 年贏持有」= 所有 10 年區間（每月一個起點）裡，策略年化比買進持有高的比例。</dd>
+        <dt>樣本內外</dt><dd>分界之前（樣本內）挑出最好的參數，看它在分界之後（樣本外）排第幾。<b>排名相關係數</b>：所有組合樣本內的排名跟樣本外的排名有多一致，+1 = 完全一致（前段好的後段也好），0 = 沒關係，負的 = 前段好的後段反而差。接近 0 或負的代表「用歷史挑這兩個參數沒有用」，維持預設就好。注意：預設參數本身是看過 2010 年後的行情才設的，所以它在樣本外表現好不算真正的驗證。</dd>
+        <dt>walk-forward</dt><dd>模擬當時的人做得到的最佳化：從起點開始，每隔幾年用「到那天為止的全部歷史」重新挑一次參數，接下來幾年照用，一段一段接起來。跟一直用你的設定、買進持有比較。重挑沒有比較好 = 不值得花力氣調參數。換參數那天不另外算調整部位的成本。</dd>
+      </dl>
+    </details>
+
+    <details>
+      <summary>8. 常見問題與注意事項</summary>
       <ul>
         <li><b>為什麼報酬比「理論報酬」低一點？</b>整張交易買不滿一張的錢、還沒湊到一張的配息都放現金沒有在賺。本金越小影響越大：100 萬時一年少約 0.01～0.25 個百分點；10 萬時可能少好幾個百分點（只買得起一張，剩下都是現金）。</li>
         <li><b>再平衡 100% 一檔、跟買進持有不一樣？</b>正常。買進持有買完就不動，剩的零頭一直是現金；再平衡的目標是 100% 投入，價格跌到零頭夠買一張時，下一次調整就會買進。</li>
@@ -297,7 +329,7 @@
     </details>
 
     <details>
-      <summary>8. 資料來源與處理方式</summary>
+      <summary>9. 資料來源與處理方式</summary>
       <ul>
         <li>資料：證交所官方日成交資料、加權指數（1990 年起）、發行量加權股價報酬指數（2003 年起）、除權除息計算結果。每個交易日自動抓取更新。</li>
         <li>除權息還原：用證交所公布的除權息參考價計算還原因子，配息再投入。分割（0050 2025 年一拆四、00631L 2026 年一拆二十二）已還原；分割暫停交易期間報酬視為 0，那幾天也不交易、不算進均線。</li>
@@ -315,6 +347,6 @@
   </section>
 </main>
 
-<script type="module" src="app.js?v=34b224aaab"></script>
+<script type="module" src="app.js?v=937340c2f3"></script>
 </body>
 </html>

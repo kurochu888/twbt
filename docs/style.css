@@ -151,6 +151,11 @@ thead th { font-weight: 500; color: var(--muted); font-size: 12.5px; }
 thead th .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 5px; }
 tr.em td { font-weight: 500; }
 td.lbl { color: var(--muted); }
+/* 參數穩健性熱力圖：顏色只是底色，數字一律用文字色 */
+table.heat td { text-align: center; font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12.5px; border: 2px solid var(--surface); cursor: pointer; }
+table.heat td.lbl, table.heat th:first-child { text-align: right; font-family: inherit; }
+table.heat th { text-align: center; }
+table.heat td.me { outline: 2px solid var(--text); outline-offset: -3px; font-weight: 600; }
 
 /* 分布條 */
 .ranges { display: grid; gap: 14px; margin-top: 6px; }

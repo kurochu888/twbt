@@ -37,6 +37,14 @@ for (const x of ref) {
         for (const code of ['0050', '00631L', '00675L']) { const g = rows.filter(r => r.code === code), py = x.roll[NAMES[code]];
           if ((g.length || 0) !== (py ? py[0] : 0) || (py && (!close(q50(g.map(r => r.cagr)), py[1]) || !close(q50(g.map(r => r.uw)), py[2])
             || !close(q50(g.map(r => r.bhUw)), py[3])))) bad.push(['trend roll', code, c.roll, g.length, py]); } }
+    } else if (c.type === 'robust') {
+      const py = x.robust, sw = E.paramSweep(data, c.asset, opts, custom, c.grid);
+      const t = E.sweepTable(sw), sp = E.sweepSplit(sw, py[0], c.obj), wf = E.sweepWalkForward(sw, py[1], c.step, c.obj);
+      const sum = k => t.rows.reduce((a, r) => a + r[k], 0);
+      const js = [py[0], py[1], E.dayToIso(sw.days[0]), t.windows, sw.def >= 0 ? sw.def : null, sum('cagr'), sum('mdd'), sum('uw'), t.windows ? sum('rollWin') : null, sum('trades'),
+        sp.corr, sp.bestRank, sp.defRank, wf.summary.wf.cagr, wf.summary.bh.mdd, wf.blocks.length];
+      const ok = js.every((v, i) => typeof v === 'number' && typeof py[i] === 'number' ? close(v, py[i]) : (n++, v === py[i]));
+      if (!ok) bad.push(['robust', c.asset, c.grid, js, py]);
     } else {
       const cfg = { weights: c.weights, freq: c.freq, band: c.band, cashRate: c.cash, trend: c.rtrend };
       const r = E.rebalPeriod(data, cfg, c.start, c.end, opts, custom);
