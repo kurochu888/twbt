@@ -1,9 +1,9 @@
 // 介面：讀設定 → 呼叫 engine.js 計算 → 畫結果
-import * as E from './engine.js?v=937340c2f3';
-import { LineChart, ScatterChart } from './plot.js?v=937340c2f3';
+import * as E from './engine.js?v=6b95a6a2dc';
+import { LineChart, ScatterChart } from './plot.js?v=6b95a6a2dc';
 
 // 版本號：tools/stamp_version.py 自動蓋上（日期 · 程式內容的 hash，跟 finance-app 一樣不手動編號）
-const BUILD_HASH = '937340c2f3';
+const BUILD_HASH = '6b95a6a2dc';
 const BUILD_DATE = '2026-10-29';
 
 const ORDER = ['TAIEX', '0050', '00631L', '00675L'];
@@ -989,13 +989,13 @@ function renderTrendMulti(rows, title) {
 
 // ---------- 參數穩健性 ----------
 const PNAME = { maFast: '快線', maSlow: '慢線', exitBuffer: '出場乘數', pyramidGap: '接刀間距', pyramidLevels: '接刀層數', recoverSlope: '轉回斜率', recoverStrong: '強反彈' };
-// better：1 = 越大越好、−1 = 越小越好（熱力圖顏色越深越好）
+// better：1 = 越大越好、−1 = 越小越好（熱力圖藍色越濃越好）；good = 說明文字「什麼叫好」
 const ROB_METRICS = {
-  cagr: { label: '年化', fmt: v => pct(v, 1), better: 1 },
-  mdd: { label: '最大回撤', fmt: v => pct(v, 0), better: 1 },
-  calmar: { label: '報酬回撤比', fmt: num2, better: 1 },
-  rollWin: { label: '10 年贏持有', fmt: v => pct(v, 0), better: 1 },
-  uw: { label: '最長套牢', fmt: dur, better: -1 },
+  cagr: { label: '年化', fmt: v => pct(v, 1), better: 1, good: '年化越高' },
+  mdd: { label: '最大回撤', fmt: v => pct(v, 0), better: 1, good: '跌得越少（例如 −45% 比 −60% 好）' },
+  calmar: { label: '報酬回撤比', fmt: num2, better: 1, good: '報酬回撤比越高' },
+  rollWin: { label: '10 年贏持有', fmt: v => pct(v, 0), better: 1, good: '贏的比例越高' },
+  uw: { label: '最長套牢', fmt: dur, better: -1, good: '套牢越短' },
 };
 const OBJ_LABEL = { cagr: '年化', calmar: '報酬回撤比' };
 const comboText = (sw, c) => sw.names.map(k => `${PNAME[k]} ${c[k]}`).join('、');
@@ -1061,7 +1061,7 @@ function renderRobust() {
       return `<td data-i="${i}" class="${i === def ? 'me' : ''}" style="background:color-mix(in srgb, var(--accent) ${shade(r[state.robMetric])}%, transparent)" title="${esc(tip(r))}">${M.fmt(r[state.robMetric])}${i === def ? ' ★' : ''}</td>`; }).join('')}</tr>`).join('')}
     </tbody></table></div>
     <p class="hint" id="robCell" style="white-space:pre-line">點一格看那組的所有數字。</p>
-    <p class="hint">顏色越深越好（${M.better > 0 ? '越大越深' : '越短越深'}）。好的參數附近應該是一片顏色差不多的高原，只有一格特別深 = 尖峰，八成是運氣。</p>
+    <p class="hint"><b>藍色越濃 = 越好</b>（${M.good}）。好的參數附近應該是一片顏色差不多的高原；只有一格特別濃、旁邊都很淡 = 尖峰，八成是運氣。</p>
     ${best >= 0 ? `<p class="hint">全期${OBJ_LABEL[obj]}最高：${esc(comboText(sw, rows[best]))} = ${objFmt(obj, rows[best][obj])}，跟上下左右鄰居平均 ${objFmt(obj, nb(best))}${def >= 0 ? `；你的設定 ${objFmt(obj, rows[def][obj])}，鄰居平均 ${objFmt(obj, nb(def))}` : ''}。</p>` : ''}
     <p class="hint">「10 年贏持有」= ${full.windows} 個 10 年區間（每月一個起點）裡，策略年化比買進持有高的比例${full.windows < 36 ? '（區間太少，參考就好）' : ''}。</p></section>`;
 

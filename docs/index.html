@@ -11,7 +11,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=937340c2f3">
+<link rel="stylesheet" href="style.css?v=6b95a6a2dc">
 </head>
 <body>
 <button class="update-banner" id="updateBanner" type="button" hidden>🔄 有新版本，點這裡更新</button>
@@ -304,7 +304,7 @@
       <p>回答「均線參數是真的有效，還是剛好貼合過去」。所有參數組合都從同一天開始（均線最長的那組算得出來的那天），跑到最新一天，扣手續費與證交稅、整張交易。各段的績效從同一條淨值切出來，不含每段期初買、期末賣的成本。</p>
       <dl class="doc">
         <dt>掃描哪兩個參數</dt><dd>快線 × 出場乘數、接刀間距 × 層數、轉回斜率 × 強反彈，三選一；沒在掃的參數照「均線趨勢策略」卡片的設定。你的設定剛好在格子上時會標 ★。</dd>
-        <dt>熱力圖</dt><dd>每一格是一組參數。顏色越深越好（年化、報酬回撤比、贏持有比例越高越深；回撤越小、套牢越短越深）。好的參數附近應該是一片顏色差不多的「高原」；只有一格特別深、旁邊都很淺 = 尖峰，八成是運氣。「10 年贏持有」= 所有 10 年區間（每月一個起點）裡，策略年化比買進持有高的比例。</dd>
+        <dt>熱力圖</dt><dd>每一格是一組參數。<b>藍色越濃 = 越好</b>：年化、報酬回撤比、贏持有比例越高越濃；最大回撤跌得越少（例如 −45% 比 −60% 好）、套牢越短越濃。好的參數附近應該是一片顏色差不多的「高原」；只有一格特別濃、旁邊都很淡 = 尖峰，八成是運氣。「10 年贏持有」= 所有 10 年區間（每月一個起點）裡，策略年化比買進持有高的比例。</dd>
         <dt>樣本內外</dt><dd>分界之前（樣本內）挑出最好的參數，看它在分界之後（樣本外）排第幾。<b>排名相關係數</b>：所有組合樣本內的排名跟樣本外的排名有多一致，+1 = 完全一致（前段好的後段也好），0 = 沒關係，負的 = 前段好的後段反而差。接近 0 或負的代表「用歷史挑這兩個參數沒有用」，維持預設就好。注意：預設參數本身是看過 2010 年後的行情才設的，所以它在樣本外表現好不算真正的驗證。</dd>
         <dt>walk-forward</dt><dd>模擬當時的人做得到的最佳化：從起點開始，每隔幾年用「到那天為止的全部歷史」重新挑一次參數，接下來幾年照用，一段一段接起來。跟一直用你的設定、買進持有比較。重挑沒有比較好 = 不值得花力氣調參數。換參數那天不另外算調整部位的成本。</dd>
       </dl>
@@ -347,6 +347,6 @@
   </section>
 </main>
 
-<script type="module" src="app.js?v=937340c2f3"></script>
+<script type="module" src="app.js?v=6b95a6a2dc"></script>
 </body>
 </html>
