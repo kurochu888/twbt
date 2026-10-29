@@ -19,9 +19,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .backtest.data import KIND, NAMES, load_returns, load_signal_inputs
-
-SCALE = 1e10
+from .backtest.data import KIND, NAMES, SCALE, load_returns, load_signal_inputs
 
 
 def _encode(s: pd.Series) -> list:

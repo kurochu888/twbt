@@ -10,6 +10,16 @@ import pandas as pd
 from ..data.synthetic import year_frac
 
 ASSETS = ["TAIEX", "0050", "00631L", "00675L"]
+# 網頁的 returns.json 把每日報酬存成「× SCALE 取整數」。Python 這邊讀進來也量化成一樣的值，
+# 兩邊的輸入逐位元相同，「夠不夠買一張」這類剛好卡在邊界的判斷才不會因為小數點後第 10 位不同而分岔。
+SCALE = 1e10
+
+
+def quantize(x):
+    """同 web_export 的編碼再解碼：四捨五入到 1 / SCALE（NaN 維持 NaN）。"""
+    return np.round(x * SCALE) / SCALE
+
+
 NAMES = {"TAIEX": "大盤（含息）", "0050": "0050", "00631L": "00631L 台灣50正2", "00675L": "00675L 加權正2"}
 # 證交稅類別：index 是比較基準、不能直接交易，不收任何成本
 KIND = {"TAIEX": "index", "0050": "etf", "00631L": "etf", "00675L": "etf"}
@@ -52,6 +62,7 @@ def load_returns(data_dir: str | Path, use_synthetic: bool = True,
         first = r[c].first_valid_index()
         if first is not None:
             r.loc[first:, c] = r.loc[first:, c].fillna(0.0)
+    r = quantize(r)
     if not use_synthetic:
         r = r.mask(s == 1)
     r.index = pd.DatetimeIndex(r.index).astype("datetime64[ns]")
@@ -80,7 +91,7 @@ def load_signal_inputs(data_dir: str | Path, rets: pd.DataFrame, syn: pd.DataFra
                 dy = json.loads((d / "params.json").read_text(encoding="utf-8"))["dividend_yield"]
                 pre = syn[code] == 1
                 pr[pre] = np.expm1(np.log1p(rets.loc[pre, code]) - dy * year_frac(rets.index)[pre])
-            price[code] = pr.where(rets[code].notna())
+            price[code] = quantize(pr).where(rets[code].notna())
     first = {c: rets[c].first_valid_index() for c in rets}
     for c in price:
         if first[c] is not None:

@@ -4,7 +4,8 @@ const data = E.prepare(JSON.parse(fs.readFileSync(process.argv[3])));
 const ref = JSON.parse(fs.readFileSync(process.argv[2]));
 const NAMES = { TAIEX: '大盤（含息）', '0050': '0050', '00631L': '00631L 台灣50正2', '00675L': '00675L 加權正2' };
 let n = 0, bad = [];
-const close = (a, b) => { n++; return Math.abs(a - b) / Math.max(1, Math.abs(b)) < 1e-6; };
+let worst = 0;
+const close = (a, b) => { n++; const d = Math.abs(a - b) / Math.max(1, Math.abs(b)); if (d > worst) worst = d; return d < 1e-6; };
 const q50 = a => E.quantile([...a].sort((x, y) => x - y), 0.5);
 for (const x of ref) {
   const c = x.case;
@@ -60,5 +61,5 @@ for (const x of ref) {
     }
   } catch (e) { bad.push(['js 例外', c.type, e.message, c]); }
 }
-console.log(`隨機 ${ref.length} 組、比對 ${n} 個數字，不一致 ${bad.length} 個`);
+console.log(`隨機 ${ref.length} 組、比對 ${n} 個數字，不一致 ${bad.length} 個；最大相對誤差 ${worst.toExponential(1)}`);
 for (const b of bad.slice(0, 12)) console.log(' ', JSON.stringify(b).slice(0, 400));
