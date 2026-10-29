@@ -43,7 +43,8 @@ for (const x of ref) {
       const t = E.sweepTable(sw), sp = E.sweepSplit(sw, py[0], c.obj), wf = E.sweepWalkForward(sw, py[1], c.step, c.obj);
       const sum = k => t.rows.reduce((a, r) => a + r[k], 0);
       const js = [py[0], py[1], E.dayToIso(sw.days[0]), t.windows, sw.def >= 0 ? sw.def : null, sum('cagr'), sum('mdd'), sum('uw'), t.windows ? sum('rollWin') : null, sum('trades'),
-        sp.corr, sp.bestRank, sp.defRank, wf.summary.wf.cagr, wf.summary.bh.mdd, wf.blocks.length];
+        sp.corr, sp.bestRank, sp.defRank, wf.summary.wf.cagr, wf.summary.bh.mdd, wf.blocks.length,
+        E.sweepSuggest(sw, t.rows, c.obj).i, E.sweepWalkForward(sw, py[1], c.step, c.obj, 'plateau').summary.wf.cagr];
       const ok = js.every((v, i) => typeof v === 'number' && typeof py[i] === 'number' ? close(v, py[i]) : (n++, v === py[i]));
       if (!ok) bad.push(['robust', c.asset, c.grid, js, py]);
     } else {

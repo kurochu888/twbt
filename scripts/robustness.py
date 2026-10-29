@@ -38,7 +38,7 @@ def heat_text(ps, df, col):
     return "\n".join(lines)
 
 
-def report(ps, df, split, wf, objective) -> str:
+def report(ps, df, split, wf, objective, ws, step) -> str:
     bh = df.attrs["bh"]
     n = len(df)
     out = [f"期間 {df.attrs['start']} ~ {df.attrs['end']}，{n} 組參數；買進持有 年化 {bh['年化']:.1%}、"
@@ -57,6 +57,15 @@ def report(ps, df, split, wf, objective) -> str:
     out.append(f"  {objective}最高：{ps.combos[best]} = {df.loc[best, objective]:.3g}，"
                f"它跟鄰居的平均 {pl.loc[key]:.3g}（差越多越像尖峰）；"
                f"鄰近平均最高：{dict(zip(ps.names, (float(v) for v in pl.idxmax())))} = {pl.max():.3g}")
+    sg = ps.suggest(df, objective)
+    if sg:
+        same = "（= 預設）" if sg["i"] == ps.default else ""
+        out.append(f"  建議參數（自己＋上下左右鄰居的{objective}平均最高、不在邊緣）：{ps.combos[sg['i']]}{same}，"
+                   f"鄰近平均 {sg['score']:.3g}、5 格裡最差 {sg['worst']:.3g}")
+        wp = ps.walk_forward(ws, step, objective, pick="plateau")["摘要"]
+        a, b = wp.loc["walk-forward", "年化"], wp.loc["預設參數", "年化"]
+        out.append(f"    這個方法在歷史上（{ws.date()} 起每 {step:g} 年用之前的歷史重挑）：年化 {a:.1%}，一直用預設 {b:.1%} → "
+                   + ("可以考慮換" if sg["i"] != ps.default and a >= b + 0.003 else "維持預設"))
     s = split
     out.append(f"\n  樣本內外（目標：{s['目標']}）：樣本內 {s['樣本內']}，樣本外 {s['樣本外']}")
     out.append(f"    兩段排名相關係數 {s['排名相關係數']:+.2f}（接近 +1 = 前段好的後段也好；≤ 0 = 前段挑的參數沒有參考價值）")
@@ -110,7 +119,7 @@ def main():
             df.to_csv(out / f"{tag}_sweep.csv", index=False, encoding="utf-8-sig")
             split["表"].to_csv(out / f"{tag}_split.csv", index=False, encoding="utf-8-sig")
             wf["每段"].to_csv(out / f"{tag}_wf.csv", index=False, encoding="utf-8-sig")
-            t = f"===== {NAMES[code]}：{gname}（{'只用真實' if a.real else '含模擬'}）=====\n" + report(ps, df, split, wf, a.objective)
+            t = f"===== {NAMES[code]}：{gname}（{'只用真實' if a.real else '含模擬'}）=====\n" + report(ps, df, split, wf, a.objective, ws, a.wf_step)
             print(t + "\n", flush=True)
             texts.append(t)
     (out / "summary.txt").write_text("\n\n".join(texts) + "\n", encoding="utf-8")

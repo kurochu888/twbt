@@ -1,9 +1,9 @@
 // 介面：讀設定 → 呼叫 engine.js 計算 → 畫結果
-import * as E from './engine.js?v=6b95a6a2dc';
-import { LineChart, ScatterChart } from './plot.js?v=6b95a6a2dc';
+import * as E from './engine.js?v=42af09a952';
+import { LineChart, ScatterChart } from './plot.js?v=42af09a952';
 
 // 版本號：tools/stamp_version.py 自動蓋上（日期 · 程式內容的 hash，跟 finance-app 一樣不手動編號）
-const BUILD_HASH = '6b95a6a2dc';
+const BUILD_HASH = '42af09a952';
 const BUILD_DATE = '2026-10-29';
 
 const ORDER = ['TAIEX', '0050', '00631L', '00675L'];
@@ -1022,6 +1022,8 @@ function renderRobust() {
   const { split, ws, notes } = robDates(sw);
   const sp = E.sweepSplit(sw, split, obj);
   const wf = E.sweepWalkForward(sw, ws, state.robWfStep, obj);
+  const sg = E.sweepSuggest(sw, full.rows, obj);
+  const wfp = E.sweepWalkForward(sw, ws, state.robWfStep, obj, 'plateau');
   const rows = full.rows, N = rows.length, def = sw.def;
   const g = E.ROBUST_GRIDS[state.robGrid];
   const fixed = Object.keys(PNAME).filter(k => !sw.names.includes(k)).map(k => `${PNAME[k]} ${sw.base[k]}`).join('、');
@@ -1042,6 +1044,20 @@ function renderRobust() {
       <div class="kpi" style="--c:${c}"><div class="t">walk-forward 年化</div><div class="v">${pct(wf.summary.wf.cagr, 1)}</div><div class="s">${wf.summary.def ? `一直用你的設定 ${pct(wf.summary.def.cagr, 1)}、` : ''}買進持有 ${pct(wf.summary.bh.cagr, 1)}（${ws} 起）</div></div>
     </div></section>`;
 
+  // 建議參數：高原中間那組；用 walk-forward 檢查「這個挑法」在歷史上有沒有比一直用你的設定好
+  if (sg) {
+    const P = wfp.summary.wf, D = wfp.summary.def, B = wf.summary.wf, s0 = full.rows[sg.i];
+    const same = sg.i === def, better = D && P.cagr >= D.cagr + 0.003;
+    const verdict = same ? '你的設定就是建議的這組，維持就好' : !D ? '你的設定不在格子上，無法比較' : better ? '可以考慮換成這組' : '維持你的設定';
+    html += `<section class="card"><h3>建議參數：${esc(comboText(sw, sw.combos[sg.i]))}</h3>
+      <p style="font-size:17px;margin:6px 0 10px"><b>${verdict}</b></p>
+      <p class="hint">怎麼挑的：每一格跟上下左右鄰居（共 5 格）的${OBJ_LABEL[obj]}平均，最高的那格；不選邊緣的格子（看不出外面是不是也好）。
+        這組自己${OBJ_LABEL[obj]} ${objFmt(obj, s0[obj])}，跟鄰居平均 ${objFmt(obj, sg.score)}、5 格裡最差 ${objFmt(obj, sg.worst)}，附近一整片都不錯，比較不像運氣。熱力圖上標 ◆。</p>
+      <p class="hint">這個挑法在歷史上準不準：從 ${ws} 起每 ${state.robWfStep} 年用「之前的歷史」照這個方法重挑，年化 <b>${pct(P.cagr, 1)}</b>${D ? `；一直用你的設定 <b>${pct(D.cagr, 1)}</b>` : ''}；每次挑最高分 ${pct(B.cagr, 1)}。${!same && D ? (better ? '照這個方法挑，歷史上比較好。' : '照這個方法挑，歷史上沒有比較好，所以不建議換。') : ''}</p>
+      ${!same ? `<button class="btn${better ? ' primary' : ''}" id="robApply" type="button" style="margin-top:8px">套用這組到均線設定</button>` : ''}
+      <p class="hint">只會換這兩個參數。另外兩組參數，用上面「掃描哪兩個參數」切換過去看；三組都看過、該換的換掉，就是最終的參數。你的設定本身是看過 2010 年後行情才定的，跟它比本來就比較吃虧，差不多就不用換。</p></section>`;
+  }
+
   // 熱力圖
   const M = ROB_METRICS[state.robMetric];
   const vals = rows.map(r => r[state.robMetric]).filter(Number.isFinite);
@@ -1058,8 +1074,9 @@ function renderRobust() {
       <div class="seg" id="robMetricSeg">${Object.entries(ROB_METRICS).map(([k, m]) => `<button type="button" data-m="${k}" aria-pressed="${k === state.robMetric}">${m.label}</button>`).join('')}</div></div>
     <div class="tbl-wrap"><table class="heat"><thead><tr><th>${PNAME[sw.names[0]]} ＼ ${PNAME[sw.names[1]]}</th>${sw.ys.map(y => `<th>${y}</th>`).join('')}</tr></thead><tbody>
     ${sw.xs.map((x, xi) => `<tr><td class="lbl">${x}</td>${sw.ys.map((y, yi) => { const i = xi * sw.ys.length + yi, r = rows[i];
-      return `<td data-i="${i}" class="${i === def ? 'me' : ''}" style="background:color-mix(in srgb, var(--accent) ${shade(r[state.robMetric])}%, transparent)" title="${esc(tip(r))}">${M.fmt(r[state.robMetric])}${i === def ? ' ★' : ''}</td>`; }).join('')}</tr>`).join('')}
+      return `<td data-i="${i}" class="${i === def ? 'me' : ''}" style="background:color-mix(in srgb, var(--accent) ${shade(r[state.robMetric])}%, transparent)" title="${esc(tip(r))}">${M.fmt(r[state.robMetric])}${i === def ? ' ★' : ''}${sg && i === sg.i ? ' ◆' : ''}</td>`; }).join('')}</tr>`).join('')}
     </tbody></table></div>
+    <p class="hint">★ = 你的設定、◆ = 建議參數。</p>
     <p class="hint" id="robCell" style="white-space:pre-line">點一格看那組的所有數字。</p>
     <p class="hint"><b>藍色越濃 = 越好</b>（${M.good}）。好的參數附近應該是一片顏色差不多的高原；只有一格特別濃、旁邊都很淡 = 尖峰，八成是運氣。</p>
     ${best >= 0 ? `<p class="hint">全期${OBJ_LABEL[obj]}最高：${esc(comboText(sw, rows[best]))} = ${objFmt(obj, rows[best][obj])}，跟上下左右鄰居平均 ${objFmt(obj, nb(best))}${def >= 0 ? `；你的設定 ${objFmt(obj, rows[def][obj])}，鄰居平均 ${objFmt(obj, nb(def))}` : ''}。</p>` : ''}
@@ -1097,6 +1114,15 @@ function renderRobust() {
 
   $('results').innerHTML = html;
   $('robMetricSeg').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; state.robMetric = b.dataset.m; save(); renderRobust(); });
+  $('robApply')?.addEventListener('click', () => {
+    const lev = E.LEVERAGE[code] >= 2 ? 2 : 1;
+    for (const k of sw.names) {
+      const v = sw.combos[sg.i][k];
+      if (v === E.TREND_DEFAULTS[lev][k]) delete state.trendCustom[lev][k]; else state.trendCustom[lev][k] = v;
+    }
+    buildParams(); save(); run();
+    $('status').textContent = `已套用：${comboText(sw, sw.combos[sg.i])}（${lev === 2 ? '正2：00631L、00675L 共用' : '0050'}的均線參數）`;
+  });
   document.querySelector('table.heat').addEventListener('click', e => { const td = e.target.closest('td[data-i]'); if (td) $('robCell').textContent = tip(rows[+td.dataset.i]); });
 
   const sc = v => obj === 'cagr' ? v * 100 : v, scFmt = v => obj === 'cagr' ? +v.toFixed(1) + '%' : +v.toFixed(2) + '';

@@ -82,7 +82,8 @@ for c in cases:
             df = ps.table(); s = ps.split_test(sp, obj); w = ps.walk_forward(ws, c["step"], obj)
             r["robust"] = [str(sp.date()), str(ws.date()), str(d0.date()), df.attrs["windows"], ps.default, float(df["年化"].sum()), float(df["最大回撤"].sum()),
                            float(df["最長套牢"].sum()), float(df["10年贏持有比例"].sum()) if "10年贏持有比例" in df else None, int(df["交易次數"].sum()), s["排名相關係數"], s["最佳組合 樣本外排名"],
-                           s["預設 樣本外排名"], float(w["摘要"].loc["walk-forward", "年化"]), float(w["摘要"].loc["買進持有", "最大回撤"]), len(w["每段"])]
+                           s["預設 樣本外排名"], float(w["摘要"].loc["walk-forward", "年化"]), float(w["摘要"].loc["買進持有", "最大回撤"]), len(w["每段"]), ps.suggest(df, obj)["i"],
+                           float(ps.walk_forward(ws, c["step"], obj, pick="plateau")["摘要"].loc["walk-forward", "年化"])]
         else:
             tb = TrendBacktest(bh, params, signal_price=c["sp"]); rb = RebalBacktest(bh, tb)
             cfg = RebalConfig(c["weights"], c["freq"], c["band"], c["cash"], c["rtrend"])

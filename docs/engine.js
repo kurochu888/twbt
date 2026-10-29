@@ -734,8 +734,27 @@ export function sweepSplit(sw, splitIso, objective = 'cagr') {
     defRank: sw.def >= 0 ? Math.trunc(rOut[sw.def]) : null, rIn, rOut };
 }
 
+// 建議參數：每一格跟上下左右鄰居（共 5 格）的平均最高的那組，只從不在邊緣的格子裡選（同 robust.py 的 suggest()）
+export function sweepSuggest(sw, rows, key) {
+  const nx = sw.xs.length, ny = sw.ys.length, v = rows.map(r => r[key]);
+  const cells = [];
+  for (let x = 1; x < nx - 1; x++) for (let y = 1; y < ny - 1; y++) cells.push([x, y]);
+  if (!cells.length) for (let x = 0; x < nx; x++) for (let y = 0; y < ny; y++) cells.push([x, y]);
+  let best = null;
+  for (const [x, y] of cells) {
+    const nb = [];
+    for (const [a, b] of [[x, y], [x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]])
+      if (a >= 0 && a < nx && b >= 0 && b < ny && !Number.isNaN(v[a * ny + b])) nb.push(v[a * ny + b]);
+    if (!nb.length) continue;
+    const score = nb.reduce((s, z) => s + z, 0) / nb.length;
+    if (!best || score > best.score) best = { i: x * ny + y, score, worst: Math.min(...nb) };
+  }
+  return best;
+}
+
 // walk-forward：從 firstIso 起每 stepYears 年用之前全部歷史重挑一次參數，接下來 stepYears 年照用
-export function sweepWalkForward(sw, firstIso, stepYears = 5, objective = 'cagr') {
+// pick：'best' = 挑最高的那組；'plateau' = 挑高原中間（sweepSuggest）
+export function sweepWalkForward(sw, firstIso, stepYears = 5, objective = 'cagr', pick = 'best') {
   const d = sw.days, n = d.length, t0 = isoToDay(firstIso);
   if (t0 <= addMonths(d[0], 36)) throw new Error(`第一次挑參數前至少要 3 年歷史（策略從 ${dayToIso(d[0])} 開始）`);
   const step = Math.round(stepYears * 12), a0 = lowerBound(d, t0);
@@ -747,7 +766,7 @@ export function sweepWalkForward(sw, firstIso, stepYears = 5, objective = 'cagr'
     if (a >= n - 1) break;
     const b = Math.min(n - 1, lowerBound(d, addMonths(cur, step)));
     const ins = sweepTable(sw, null, dayToIso(d[a - 1]), 0);
-    const k = argmax(ins.rows.map(r => r[objective]));
+    const k = pick === 'best' ? argmax(ins.rows.map(r => r[objective])) : sweepSuggest(sw, ins.rows, objective).i;
     for (let i = a; i <= b; i++) wf[i - a0] = wf[a - a0] * sw.eq[k][i] / sw.eq[k][a];
     blocks.push({ start: dayToIso(d[a]), end: dayToIso(d[b]), k, combo: sw.combos[k], isDef: k === sw.def,
       cagr: swCagr(sw, sw.eq[k], a, b), defCagr: sw.def >= 0 ? swCagr(sw, sw.eq[sw.def], a, b) : NaN, bhCagr: swCagr(sw, sw.bh, a, b) });

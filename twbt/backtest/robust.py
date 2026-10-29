@@ -165,9 +165,10 @@ class ParamSweep:
 
     # ---------- walk-forward ----------
     def walk_forward(self, first_test, step_years: float = 5, objective: str = "年化",
-                     lookback_years: float | None = None) -> dict:
+                     lookback_years: float | None = None, pick: str = "best") -> dict:
         """從 first_test 起每 step_years 年重挑一次參數（用之前全部的歷史，或最近 lookback_years 年），
-        接下來 step_years 年照用。回傳每段選了什麼、接起來的淨值，以及一直用預設、買進持有的同期淨值。"""
+        接下來 step_years 年照用。回傳每段選了什麼、接起來的淨值，以及一直用預設、買進持有的同期淨值。
+        pick：「best」= 挑最高的那組；「plateau」= 挑高原中間（同 suggest()）。"""
         d = self.dates
         t0 = pd.Timestamp(first_test)
         if t0 <= d[0] + pd.DateOffset(years=3):
@@ -183,7 +184,7 @@ class ParamSweep:
             b = min(len(d) - 1, int(d.searchsorted(cur + step)))
             hist0 = None if lookback_years is None else cur - pd.DateOffset(months=round(lookback_years * 12))
             ins = self.table(hist0 if hist0 is None or hist0 > d[0] else None, d[a - 1], roll_years=None)
-            k = int(ins[objective].idxmax())
+            k = int(ins[objective].idxmax()) if pick == "best" else self.suggest(ins, objective)["i"]
             seg = self.eq[k][a:b + 1] / self.eq[k][a]
             wf[a - a0:b - a0 + 1] = wf[a - a0] * seg
             blocks.append({"開始": d[a].date(), "結束": d[b].date(), **self.combos[k],
@@ -225,6 +226,24 @@ class ParamSweep:
             out[i, j] = np.nanmean(nb)
         hp = self.heat(df, col)
         return pd.DataFrame(out, index=hp.index, columns=hp.columns).stack().rename(f"{col}（鄰近平均）")
+
+    def suggest(self, df: pd.DataFrame, col: str) -> dict:
+        """建議參數：每一格跟上下左右鄰居（共 5 格）的平均最高的那組，只從不在邊緣的格子裡選
+        （邊緣沒有外側的鄰居可以比，看不出是不是高原）。回傳 {"i": 第幾組, "score": 鄰近平均, "worst": 5 格裡最差的}。"""
+        nx, ny = len(self.grid[self.names[0]]), len(self.grid[self.names[1]])
+        v = df[col].to_numpy(dtype=float)
+        inner = [(x, y) for x in range(1, nx - 1) for y in range(1, ny - 1)]
+        cells = inner or [(x, y) for x in range(nx) for y in range(ny)]
+        best = None
+        for x, y in cells:
+            nb = [v[a * ny + b] for a, b in ((x, y), (x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1))
+                  if 0 <= a < nx and 0 <= b < ny and not np.isnan(v[a * ny + b])]
+            if not nb:
+                continue
+            score = sum(nb) / len(nb)
+            if best is None or score > best["score"]:
+                best = {"i": x * ny + y, "score": score, "worst": min(nb)}
+        return best
 
     def params_of(self, i: int) -> dict:
         return asdict(replace(self.base, **self.combos[i]))
