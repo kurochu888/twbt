@@ -136,32 +136,42 @@ class TrendBacktest:
         sig_ret, traded = load_signal_inputs(data_dir or bh.data_dir, self.rets, self.syn, bh.tw50_excess)
         if signal_price == "adjusted":
             sig_ret = self.rets
+        self._sig_ret, self._traded = sig_ret, traded
         self._sig = {}
         for c in self.rets.columns:
-            r = self.rets[c]
-            first = r.first_valid_index()
-            if first is None:
-                continue
-            i0 = self.rets.index.get_loc(first) - 1          # 前一天當作價格 1 的起點
-            price = np.concatenate([[1.0], np.cumprod(1 + r.iloc[i0 + 1:].to_numpy())])   # 損益用（含息）
-            spx = np.concatenate([[1.0], np.cumprod(1 + sig_ret[c].iloc[i0 + 1:].fillna(0).to_numpy())])
-            mask = traded[c].iloc[i0:].to_numpy().copy()
-            mask[0] = True
-            sig = signals(spx[mask], self.params[c])           # 只用有交易的日子算均線
-            pos = np.flatnonzero(mask)
-            full = {}
-            for k in ("act", "status", "layers"):
-                arr = np.zeros(len(price), dtype=np.int8)
-                if k == "act":
-                    arr[pos] = sig[k]
-                else:                                           # 暫停交易的日子維持前一天的狀態
-                    idx = np.maximum.accumulate(np.where(mask, np.arange(len(mask)), 0))
-                    arr = sig[k][np.searchsorted(pos, idx)]
-                full[k] = arr
-            win = max(self.params[c].ma_fast, self.params[c].ma_slow)
-            # 均線第一次算得出來的那天（跟 app 的 runBacktest 起點一樣）；之前策略只能觀望，比較不公平
-            min_si = i0 + int(pos[win - 1]) if len(pos) >= win else len(self.rets)
-            self._sig[c] = {"i0": i0, "min_si": min_si, "price": price, **full}
+            self._build(c)
+
+    def set_params(self, asset: str, p: TrendParams):
+        """換一檔的參數、只重算那一檔的訊號（不用重新讀資料；參數掃描用）。"""
+        self.params[asset] = p
+        self._build(asset)
+
+    def _build(self, c):
+        r = self.rets[c]
+        first = r.first_valid_index()
+        if first is None:
+            self._sig.pop(c, None)
+            return
+        i0 = self.rets.index.get_loc(first) - 1          # 前一天當作價格 1 的起點
+        price = np.concatenate([[1.0], np.cumprod(1 + r.iloc[i0 + 1:].to_numpy())])   # 損益用（含息）
+        spx = np.concatenate([[1.0], np.cumprod(1 + self._sig_ret[c].iloc[i0 + 1:].fillna(0).to_numpy())])
+        mask = self._traded[c].iloc[i0:].to_numpy().copy()
+        mask[0] = True
+        sig = signals(spx[mask], self.params[c])           # 只用有交易的日子算均線
+        pos = np.flatnonzero(mask)
+        full = {}
+        for k in ("act", "status", "layers"):
+            arr = np.zeros(len(price), dtype=np.int8)
+            if k == "act":
+                arr[pos] = sig[k]
+            else:                                           # 暫停交易的日子維持前一天的狀態
+                idx = np.maximum.accumulate(np.where(mask, np.arange(len(mask)), 0))
+                arr = sig[k][np.searchsorted(pos, idx)]
+            full[k] = arr
+        win = max(self.params[c].ma_fast, self.params[c].ma_slow)
+        # 均線第一次算得出來的那天（跟 app 的 runBacktest 起點一樣）；之前策略只能觀望，比較不公平
+        min_si = i0 + int(pos[win - 1]) if len(pos) >= win else len(self.rets)
+        self._sig[c] = {"i0": i0, "min_si": min_si, "price": price, **full}
 
     # ---------- 單一區間 ----------
     def run(self, asset: str, start, end) -> TrendResult:
