@@ -1,36 +1,72 @@
 // 介面：讀設定 → 呼叫 engine.js 計算 → 畫結果
-import * as E from './engine.js?v=fb0fe6c16c';
-import { LineChart, ScatterChart } from './plot.js?v=fb0fe6c16c';
+import * as E from './engine.js?v=d9b62b5b0a';
+import { LineChart, ScatterChart } from './plot.js?v=d9b62b5b0a';
 
 // 版本號：tools/stamp_version.py 自動蓋上（日期 · 程式內容的 hash，跟 finance-app 一樣不手動編號）
-const BUILD_HASH = 'fb0fe6c16c';
-const BUILD_DATE = '2026-10-30';
+const BUILD_HASH = 'd9b62b5b0a';
+const BUILD_DATE = '2026-10-31';
 
-const ORDER = ['TAIEX', '0050', '00631L', '00675L'];
-const LABEL = { TAIEX: '大盤（含息）', '0050': '0050', '00631L': '00631L 台灣50正2', '00675L': '00675L 加權正2' };
-const SHORT = { TAIEX: '大盤', '0050': '0050', '00631L': '00631L', '00675L': '00675L' };
+// ---------- 市場：台股／美股 ----------
+// 兩個市場的資料、幣別、交易單位都不同，各自一份設定（存在不同的 key）；切換時存好設定、重新載入頁面。
+// 網址 ?m=us 直接開美股；沒指定就用上次選的
+const MARKET_KEY = 'twbt.market';
+const MARKET = (() => {
+  const q = new URLSearchParams(location.search).get('m');
+  if (q === 'us' || q === 'tw') return q;
+  try { return localStorage.getItem(MARKET_KEY) === 'us' ? 'us' : 'tw'; } catch (_) { return 'tw'; }
+})();
+const MARKETS = {
+  tw: {
+    file: 'data/returns.json', title: '台股回測', currency: '元', order: ['TAIEX', '0050', '00631L', '00675L'],
+    label: { TAIEX: '大盤（含息）', '0050': '0050', '00631L': '00631L 台灣50正2', '00675L': '00675L 加權正2' },
+    short: { TAIEX: '大盤', '0050': '0050', '00631L': '00631L', '00675L': '00675L' },
+    bench: 'TAIEX', base: '0050', lev: '00631L', levs: ['00631L', '00675L'], capital: 1_000_000, store: 'twbt.settings.v1',
+    unit: '張', lotText: '整張交易（一張 1000 股）', minTrade: '1,000 元', levListedLabel: '正2 上市後', levListed: '2014-10-31',
+    rb: { '0050': 0, '00631L': 50, '00675L': 0, CASH: 50 },
+    rbPresets: [
+      ['00631L 50% ＋ 現金', { '0050': 0, '00631L': 50, '00675L': 0, CASH: 50 }],
+      ['00631L 65% ＋ 現金（約 1.3 倍）', { '0050': 0, '00631L': 65, '00675L': 0, CASH: 35 }],
+      ['0050 50% ＋ 00631L 50%', { '0050': 50, '00631L': 50, '00675L': 0, CASH: 0 }],
+    ],
+    crashes: [['1990 崩盤', '1990-01-01', '1991-12-31'], ['2000 網路泡沫', '2000-01-01', '2003-12-31'], ['2008 金融海嘯', '2007-06-01', '2010-12-31']],
+  },
+  us: {
+    file: 'data/returns_us.json', title: '美股回測', currency: '美元', order: ['NDX', 'QQQ', 'QLD'],
+    label: { NDX: 'Nasdaq-100（含息）', QQQ: 'QQQ', QLD: 'QLD 那斯達克正2' },
+    short: { NDX: 'NDX', QQQ: 'QQQ', QLD: 'QLD' },
+    bench: 'NDX', base: 'QQQ', lev: 'QLD', levs: ['QLD'], capital: 30_000, store: 'twbt.settings.us.v1',
+    unit: '股', lotText: '整股交易（一次 1 股）', minTrade: '30 美元', levListedLabel: 'QLD 上市後', levListed: '2006-06-21',
+    rb: { QQQ: 0, QLD: 50, CASH: 50 },
+    rbPresets: [
+      ['QLD 50% ＋ 現金', { QQQ: 0, QLD: 50, CASH: 50 }],
+      ['QLD 65% ＋ 現金（約 1.3 倍）', { QQQ: 0, QLD: 65, CASH: 35 }],
+      ['QQQ 50% ＋ QLD 50%', { QQQ: 50, QLD: 50, CASH: 0 }],
+    ],
+    crashes: [['1987 股災', '1987-01-01', '1989-12-31'], ['2000 網路泡沫', '2000-01-01', '2003-12-31'], ['2008 金融海嘯', '2007-06-01', '2010-12-31'], ['2022 升息', '2021-11-01', '2024-03-31']],
+  },
+};
+const MK = MARKETS[MARKET];
+const ORDER = MK.order, LABEL = MK.label, SHORT = MK.short;
+const BENCH = MK.bench, BASE = MK.base, LEV = MK.lev;     // 比較基準、1 倍、正2（台股 TAIEX／0050／00631L，美股 NDX／QQQ／QLD）
 const DAY_MS = 86400000;
-const STORE_KEY = 'twbt.settings.v1';
+const STORE_KEY = MK.store;
 
 const $ = id => document.getElementById(id);
 const MC_MAX = 20000;   // 蒙地卡羅最多幾條
 const state = {
-  mode: 'period', assets: new Set(ORDER), capital: 1_000_000, discount: 1, useSyn: true, excess: true,
+  mode: 'period', assets: new Set(ORDER), capital: MK.capital, discount: 1, useSyn: true, excess: true,
+  usComm: 0, usMinFee: 0,             // 美股：手續費率 %、每筆最低（美元）
   start: '2000-01-01', end: '', rollYears: 10, rndN: 500, rndMin: 5, rndMax: 15, seed: 42,
   metric: 'cagr', log: true,
-  strategy: 'bh', trendCustom: { 1: {}, 2: {} }, signalPrice: 'raw', chartAsset: '00631L',
+  strategy: 'bh', trendCustom: { 1: {}, 2: {} }, signalPrice: 'raw', chartAsset: LEV,
   mcN: 1000, mcYears: 10, mcSeed: 1, mcBlock: 120, mcMetric: 'cagr',
-  rbWeights: { '0050': 0, '00631L': 50, '00675L': 0, CASH: 50 }, rbFreq: 'Q', rbBand: 5, rbCash: 1, rbTrend: false,
-  robAsset: '00631L', robGrid: 'exit', robObj: 'cagr', robSplit: '2010-01-01', robWfStart: '2000-01-01', robWfStep: 5, robMetric: 'cagr',
+  rbWeights: { ...MK.rb }, rbFreq: 'Q', rbBand: 5, rbCash: 1, rbTrend: false,
+  robAsset: LEV, robGrid: 'exit', robObj: 'cagr', robSplit: '2010-01-01', robWfStart: '2000-01-01', robWfStep: 5, robMetric: 'cagr',
 };
 const DEFAULTS = { ...state, assets: new Set(ORDER), rbWeights: { ...state.rbWeights } };
 
-const RB_PRESETS = [
-  ['00631L 50% ＋ 現金', { '0050': 0, '00631L': 50, '00675L': 0, CASH: 50 }],
-  ['00631L 65% ＋ 現金（約 1.3 倍）', { '0050': 0, '00631L': 65, '00675L': 0, CASH: 35 }],
-  ['0050 50% ＋ 00631L 50%', { '0050': 50, '00631L': 50, '00675L': 0, CASH: 0 }],
-];
-const RB_NAMES = { '0050': '0050', '00631L': '00631L', '00675L': '00675L', CASH: '現金' };
+const RB_PRESETS = MK.rbPresets;
+const RB_NAMES = { ...Object.fromEntries(Object.keys(MK.rb).filter(k => k !== 'CASH').map(k => [k, SHORT[k]])), CASH: '現金' };
 // 上一次蒙地卡羅結果（設定一樣才顯示）、執行中的代號（換設定就作廢）、執行中那次的設定（設定沒變就不中斷）
 let mcLast = null, mcToken = 0, mcRunning = null;
 const PARAM_FIELDS = [
@@ -58,7 +94,9 @@ function pct(x, d = 1, sign = false) {
   const s = (x * 100).toFixed(d) + '%';
   return sign && x > 0 ? '+' + s : s;
 }
-const money = x => Number.isFinite(x) ? Math.round(x).toLocaleString('zh-TW') : '－';
+// 美股的小金額（一股的價格、手續費）顯示到分
+const money = x => !Number.isFinite(x) ? '－' : MARKET === 'us' && Math.abs(x) < 10000 && Math.round(x) !== x
+  ? x.toLocaleString('zh-TW', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : Math.round(x).toLocaleString('zh-TW');
 // 長金額縮寫：1.36 億、8,201 萬（卡片空間小時用）
 const moneyShort = x => !Number.isFinite(x) ? '－' : Math.abs(x) >= 1e8 ? (x / 1e8).toFixed(x >= 1e10 ? 0 : x >= 1e9 ? 1 : 2) + ' 億'
   : Math.abs(x) >= 1e4 ? Math.round(x / 1e4).toLocaleString('zh-TW') + ' 萬' : money(x);
@@ -86,7 +124,7 @@ function restore() {
     if (s) Object.assign(state, s, {
       assets: new Set(s.assets?.length ? s.assets : ORDER),
       trendCustom: { 1: { ...(s.trendCustom?.[1] || {}) }, 2: { ...(s.trendCustom?.[2] || {}) } },
-      rbWeights: { '0050': 0, '00631L': 0, '00675L': 0, CASH: 0, ...(s.rbWeights || { '00631L': 50, CASH: 50 }) },
+      rbWeights: { ...Object.fromEntries(Object.keys(MK.rb).map(k => [k, 0])), ...(s.rbWeights || MK.rb) },
     });
   } catch (_) { /* 忽略 */ }
   sanitize();
@@ -101,12 +139,13 @@ function sanitize() {
   const pick = (k, list) => { if (!list.includes(state[k])) state[k] = D[k]; };
   const bool = k => { if (typeof state[k] !== 'boolean') state[k] = D[k]; };
   num('capital', 1, 1e12, true); pick('discount', [1, 0.6, 0.5, 0.38, 0.28, 0]);
+  num('usComm', 0, 2); num('usMinFee', 0, 100);
   bool('useSyn'); bool('excess'); bool('log'); bool('rbTrend');
   num('rollYears', 1, 30, true); num('rndN', 10, 5000, true); num('rndMin', 0.5, 30); num('rndMax', 0.5, 30); num('seed', -1e9, 1e9, true);
   num('mcN', 100, MC_MAX, true); num('mcYears', 1, 30, true); num('mcSeed', -1e9, 1e9, true); pick('mcBlock', [1, 20, 60, 120, 250]);
   num('rbBand', 0, 50); num('rbCash', 0, 10);
   pick('strategy', ['bh', 'trend', 'rebal']); pick('mode', ['period', 'rolling', 'random', 'mc', 'robust']);
-  pick('robAsset', ['0050', '00631L', '00675L']); pick('robGrid', Object.keys(E.ROBUST_GRIDS)); pick('robObj', ['cagr', 'calmar']);
+  pick('robAsset', ORDER.slice(1)); pick('robGrid', Object.keys(E.ROBUST_GRIDS)); pick('robObj', ['cagr', 'calmar']);
   pick('robMetric', Object.keys(ROB_METRICS)); num('robWfStep', 1, 10, true);
   pick('signalPrice', ['raw', 'adjusted']); pick('metric', Object.keys(METRICS)); pick('mcMetric', ['cagr', 'mdd', 'total']);
   pick('rbFreq', ['none', 'M', 'Q', 'H', 'Y']); pick('chartAsset', ORDER);
@@ -118,7 +157,7 @@ function sanitize() {
   state.assets = new Set([...state.assets].filter(c => ORDER.includes(c)));
   if (!state.assets.size) state.assets = new Set(ORDER);
   const w = {};
-  for (const k of ['0050', '00631L', '00675L', 'CASH']) { const v = Number(state.rbWeights?.[k]); w[k] = Number.isFinite(v) ? Math.min(100, Math.max(0, v)) : 0; }
+  for (const k of Object.keys(MK.rb)) { const v = Number(state.rbWeights?.[k]); w[k] = Number.isFinite(v) ? Math.min(100, Math.max(0, v)) : 0; }
   state.rbWeights = w;
   for (const lev of [1, 2]) {
     const c = state.trendCustom[lev] || {};
@@ -148,8 +187,7 @@ function buildControls() {
   const back = y => { const d = new Date(last); d.setUTCFullYear(d.getUTCFullYear() - y); return d.toISOString().slice(0, 10); };
   const presets = [
     ['全部期間', first, last], ['近 5 年', back(5), last], ['近 10 年', back(10), last],
-    ['正2 上市後', '2014-10-31', last], ['1990 崩盤', '1990-01-01', '1991-12-31'],
-    ['2000 網路泡沫', '2000-01-01', '2003-12-31'], ['2008 金融海嘯', '2007-06-01', '2010-12-31'],
+    [MK.levListedLabel, MK.levListed, last], ...MK.crashes,
   ];
   $('presets').innerHTML = presets.map(([t, s, e]) => `<button class="chip" type="button" data-s="${s}" data-e="${e}">${t}</button>`).join('');
   $('presets').addEventListener('click', e => {
@@ -166,6 +204,7 @@ function buildControls() {
   $('start').min = $('end').min = first; $('start').max = $('end').max = last;
   const set = (id, v) => { $(id).value = v; };
   set('capital', money(state.capital)); set('discount', String(state.discount));
+  set('usComm', state.usComm); set('usMinFee', state.usMinFee);
   $('useSyn').checked = state.useSyn; $('excess').checked = state.excess;
   set('start', state.start); set('end', state.end); set('rollYears', state.rollYears);
   set('rndN', state.rndN); set('rndMin', state.rndMin); set('rndMax', state.rndMax); set('rndSeed', state.seed);
@@ -176,6 +215,10 @@ function buildControls() {
   });
   $('capital').addEventListener('blur', () => { $('capital').value = money(state.capital); });
   $('discount').addEventListener('change', () => { state.discount = +$('discount').value; changed(); });
+  for (const [id, lo, hi] of [['usComm', 0, 2], ['usMinFee', 0, 100]]) {
+    $(id).addEventListener('input', () => { const v = clampNum($(id).value, lo, hi); if (v !== null) { state[id] = v; changed(); } });
+    $(id).addEventListener('change', () => { $(id).value = state[id]; });
+  }
   $('useSyn').addEventListener('change', () => { state.useSyn = $('useSyn').checked; changed(); });
   $('excess').addEventListener('change', () => { state.excess = $('excess').checked; changed(); });
   const bindNum = (id, key, lo, hi) => {
@@ -240,12 +283,34 @@ function buildControls() {
   showMode();
 
   if (DATA.params?.gap_0050 !== undefined) $('gapText').textContent = pct(DATA.params.gap_0050, 2);
+  $('robAsset').innerHTML = [LEV, ...MK.levs.filter(c => c !== LEV), BASE].map(c => `<option value="${c}">${LABEL[c]}</option>`).join('');
+  $('robAsset').value = state.robAsset;
+}
+
+// 市場：介面文字、欄位跟著換；切換 = 存好目前的設定、記住選擇、重新載入（兩個市場的資料與設定各自獨立）
+function setupMarket() {
+  const us = MARKET === 'us';
+  document.title = `${MK.title}`;
+  $('title').textContent = MK.title;
+  $('marketSeg').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', b.dataset.m === MARKET));
+  $('marketSeg').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b || b.dataset.m === MARKET) return;
+    save();
+    try { localStorage.setItem(MARKET_KEY, b.dataset.m); } catch (_) { /* 無痕模式 */ }
+    const u = new URL(location.href); u.searchParams.set('m', b.dataset.m); location.href = u.toString();
+  });
+  $('capitalLabel').textContent = `投入金額（${MK.currency}）`;
+  $('discountField').hidden = us; $('usCommField').hidden = !us; $('usFeeRow').hidden = !us;
+  $('excessRow').hidden = us;
+  $('signalHint').textContent = us ? '只影響有配息的日子（QQQ 每季配息，QLD 偶爾）：除息那天股價下跌，均線看得到。損益一律含配息（扣 30% 預扣稅）。'
+    : '只影響 0050：除息那天股價下跌，均線看得到。損益一律含配息。';
+  $('usGuide').open = us;
 }
 
 function buildParams() {
   const D = E.TREND_DEFAULTS;
   const val = (lev, k) => state.trendCustom[lev][k] ?? D[lev][k];
-  $('params').innerHTML = `<span></span><span class="ph">正2（00631L、00675L）</span><span class="ph">1 倍（0050）</span>` +
+  $('params').innerHTML = `<span></span><span class="ph">正2（${MK.levs.join('、')}）</span><span class="ph">1 倍（${BASE}）</span>` +
     PARAM_FIELDS.map(([k, label, step, lo, hi]) => `<span class="pl">${label}</span>` + [2, 1].map(lev =>
       `<input type="number" inputmode="decimal" data-lev="${lev}" data-k="${k}" step="${step}" min="${lo}" max="${hi}" value="${val(lev, k)}" class="${state.trendCustom[lev][k] !== undefined ? 'changed' : ''}" aria-label="${label}（${lev === 2 ? '正2' : '1 倍'}）">`).join('')).join('');
   $('params').oninput = e => {
@@ -275,8 +340,8 @@ function syncStrategyUI() {
   $('trendCard').hidden = !(trend || (rebal && state.rbTrend));
   $('rebalCard').hidden = !rebal;
   $('assetsField').hidden = rebal;
-  const chip = $('assets').querySelector('[data-code="TAIEX"]');
-  if (chip) { chip.disabled = trend; chip.title = trend ? '大盤是指數不能交易，策略模式不列入' : ''; }
+  const chip = $('assets').querySelector(`[data-code="${BENCH}"]`);
+  if (chip) { chip.disabled = trend; chip.title = trend ? `${SHORT[BENCH]}是指數不能交易，策略模式不列入` : ''; }
 }
 
 function showMode() {
@@ -289,11 +354,11 @@ const changed = debounce(() => { save(); run(); }, 150);
 // ---------- 計算 ----------
 function opts() {
   return {
-    useSynthetic: state.useSyn, tw50Excess: state.excess, capital: state.capital,
-    cost: E.makeCost({ discount: state.discount }), signalPrice: state.signalPrice,
+    useSynthetic: state.useSyn, tw50Excess: state.excess, capital: state.capital, signalPrice: state.signalPrice,
+    cost: MARKET === 'us' ? E.makeUsCost({ commission: state.usComm / 100, minFee: state.usMinFee }) : E.makeCost({ discount: state.discount }),
   };
 }
-const codes = () => ORDER.filter(c => state.assets.has(c) && !(state.strategy === 'trend' && c === 'TAIEX'));
+const codes = () => ORDER.filter(c => state.assets.has(c) && !(state.strategy === 'trend' && c === BENCH));
 
 function run() {
   $('excessRow').classList.toggle('disabled', !state.useSyn);
@@ -378,8 +443,8 @@ function runRebal() {
 
 // 對照組：名稱、顏色
 const RB_ITEMS = [
-  ['main', '再平衡策略', '--text'], ['noTr', '同配置不搭配均線', '--c-00675L'], ['flat', '同配置不再平衡', '--muted'], ['bh50', '0050 買進持有', '--c-0050'],
-  ['bh631', '00631L 買進持有', '--c-alt'], ['tr631', '00631L 均線策略', '--c-00631L'],
+  ['main', '再平衡策略', '--text'], ['noTr', '同配置不搭配均線', '--c-00675L'], ['flat', '同配置不再平衡', '--muted'], ['bh50', `${BASE} 買進持有`, `--c-${BASE}`],
+  ['bh631', `${LEV} 買進持有`, '--c-alt'], ['tr631', `${LEV} 均線策略`, `--c-${LEV}`],
 ];
 // 列名跟著設定：前幾列是「你的設定」和只改一個條件的對照，後三列是固定對照（不受這張卡的設定影響）
 function rbLabel(k) {
@@ -392,7 +457,7 @@ function rbLabel(k) {
 }
 const FIXED = new Set(['bh50', 'bh631', 'tr631']);
 const groupRow = (cols, prev, k) => (FIXED.has(k) && !FIXED.has(prev)) ? `<tr class="grp"><td colspan="${cols}">固定對照（不受上面的設定影響）</td></tr>` : '';
-const hasTrendEffect = cfg => cfg.trend && Object.keys(E.normWeights(cfg.weights)).some(k => k === '00631L' || k === '00675L');
+const hasTrendEffect = cfg => cfg.trend && Object.keys(E.normWeights(cfg.weights)).some(k => MK.levs.includes(k));
 function cfgLabel(cfg) {
   const w = E.normWeights(cfg.weights);
   const mix = Object.entries(w).map(([k, v]) => `${RB_NAMES[k]} ${Math.round(v * 100)}%`).join(' ＋ ');
@@ -405,9 +470,9 @@ function renderRebalPeriod(cfg) {
   if (res.error) { $('results').innerHTML = `<div class="warn">${esc(res.error)}</div>`; return; }
   let s0 = E.dayToIso(res.dayIdx[0]);
   const s1 = E.dayToIso(res.dayIdx[res.dayIdx.length - 1]);
-  // 00631L 均線策略要等均線算得出來；比它早的起點，全部對照組一起延後，才是同一段期間比
+  // 00631L（美股 QLD）均線策略要等均線算得出來；比它早的起點，全部對照組一起延後，才是同一段期間比
   let aligned = null;
-  const tr0 = E.trendPeriod(DATA, ['00631L'], s0, s1, opts(), state.trendCustom).results?.[0];
+  const tr0 = E.trendPeriod(DATA, [LEV], s0, s1, opts(), state.trendCustom).results?.[0];
   let trSkip = null;
   // 只差均線暖身（一年內）才一起延後；差更多（例如只用真實資料、配置裡沒有正2）就不列 00631L 均線策略
   if (tr0?.shiftedFrom && tr0.shiftedFrom > s0 && E.isoToDay(tr0.shiftedFrom) - E.isoToDay(s0) > 400) trSkip = tr0.shiftedFrom;
@@ -426,22 +491,22 @@ function renderRebalPeriod(cfg) {
     const nt = E.rebalPeriod(DATA, { ...cfg, trend: false }, s0, s1, opts(), state.trendCustom);
     if (!nt.error) items.push({ k: 'noTr', eq: nt.main.eq, dayIdx: nt.dayIdx });
   }
-  const bh = E.period(DATA, ['0050', '00631L'], s0, s1, opts());
-  for (const r of bh.results || []) items.push({ k: r.code === '0050' ? 'bh50' : 'bh631', eq: r.equity, dayIdx: r.dayIdx });
-  const tr = trSkip ? {} : E.trendPeriod(DATA, ['00631L'], s0, s1, opts(), state.trendCustom);
+  const bh = E.period(DATA, [BASE, LEV], s0, s1, opts());
+  for (const r of bh.results || []) items.push({ k: r.code === BASE ? 'bh50' : 'bh631', eq: r.equity, dayIdx: r.dayIdx });
+  const tr = trSkip ? {} : E.trendPeriod(DATA, [LEV], s0, s1, opts(), state.trendCustom);
   if (tr.results?.[0]) items.push({ k: 'tr631', eq: tr.results[0].equity, dayIdx: tr.results[0].dayIdx, note: tr.results[0].shiftedFrom });
   for (const it of items) { const m = RB_ITEMS.find(x => x[0] === it.k); it.name = rbLabel(it.k); it.color = css(m[2]); it.st = E.summarize(it.eq, it.dayIdx); }
   items.sort((a, b) => RB_ITEMS.findIndex(x => x[0] === a.k) - RB_ITEMS.findIndex(x => x[0] === b.k));
 
   const nReb = res.main.log.filter(l => l.what === '再平衡').length, nSig = res.main.log.length - nReb;
-  // 整張交易：配置金額不到半張的標的，四捨五入到 0 張，永遠買不到
+  // 整張交易：配置金額不到半張（美股半股）的標的，四捨五入到 0 張，永遠買不到
   const wN = E.normWeights(cfg.weights);
   const tooSmall = Object.entries(res.lotPrice).filter(([c, pl]) => state.capital * wN[c] < pl / 2);
-  let html = trSkip ? `<div class="warn">00631L 均線策略在這段期間最早 ${trSkip} 才能開始，跟這個配置差太多，沒有列入比較。</div>` : '';
-  if (cfg.trend && !hasTrendEffect(cfg)) html += `<div class="warn">這個配置沒有正2（00631L、00675L），「搭配均線訊號」只管正2，開或關結果都一樣。</div>`;
+  let html = trSkip ? `<div class="warn">${LEV} 均線策略在這段期間最早 ${trSkip} 才能開始，跟這個配置差太多，沒有列入比較。</div>` : '';
+  if (cfg.trend && !hasTrendEffect(cfg)) html += `<div class="warn">這個配置沒有正2（${MK.levs.join('、')}），「搭配均線訊號」只管正2，開或關結果都一樣。</div>`;
   else if (hasTrendEffect(cfg) && nSig === 0) html += `<div class="warn">這段期間正2 的均線沒有任何動作（沒有出場、接刀或轉回續抱），所以「搭配均線訊號」開或關結果一樣。拉長期間（例如包含 2008、2020、2022 年）就看得出差別。</div>`;
-  if (tooSmall.length) html += `<div class="warn">整張交易（一張 1000 股）：投入金額 × 比例不到半張，買不到 ${tooSmall.map(([c, pl]) => `${c}（配置 ${money(state.capital * wN[c])}，一張 ${money(pl)}）`).join('、')}，那部分會一直是現金。請提高投入金額。</div>`;
-  html += aligned ? `<div class="warn">00631L 均線策略要先累積均線，最早 ${aligned} 才能開始；為了在同一段期間比較，全部從那天開始。</div>`
+  if (tooSmall.length) html += `<div class="warn">${MK.lotText}：投入金額 × 比例不到半${MK.unit}，買不到 ${tooSmall.map(([c, pl]) => `${c}（配置 ${money(state.capital * wN[c])}，一${MK.unit} ${money(pl)}）`).join('、')}，那部分會一直是現金。請提高投入金額。</div>`;
+  html += aligned ? `<div class="warn">${LEV} 均線策略要先累積均線，最早 ${aligned} 才能開始；為了在同一段期間比較，全部從那天開始。</div>`
     : res.shifted ? `<div class="warn">這個配置最早 ${res.shifted} 才有資料${cfg.trend ? '（正2 的均線要先累積）' : ''}，從那天開始。</div>` : '';
   html += `<section class="card"><h3>${esc(cfgLabel(cfg))}</h3>
     <p class="hint">${s0} ～ ${s1} · 再平衡 ${nReb} 次${cfg.trend ? ` · 均線訊號 ${nSig} 次` : ''} · 交易 ${res.main.trades} 筆 · 期末 ${moneyShort(res.stats.final)}</p>
@@ -506,12 +571,12 @@ function renderRebalMulti(cfg, wins, title) {
   if (!rows.length) { $('results').innerHTML = `<div class="warn">沒有符合條件的區間。${state.useSyn ? '' : '只用真實資料時期間較短，試試縮短長度或開啟模擬資料。'}</div>`; return; }
   const key = r => r.start + '|' + r.end;
   const bh = new Map(), tr = new Map();
-  for (const r of E.windows(DATA, ['0050', '00631L'], wins, opts())) bh.set(r.code + key(r), r);
-  for (const r of E.trendWindows(DATA, ['00631L'], wins, opts(), state.trendCustom)) tr.set(key(r), r);
+  for (const r of E.windows(DATA, [BASE, LEV], wins, opts())) bh.set(r.code + key(r), r);
+  for (const r of E.trendWindows(DATA, [LEV], wins, opts(), state.trendCustom)) tr.set(key(r), r);
   const nt = new Map();
   if (hasTrendEffect(cfg)) for (const r of E.rebalWindows(DATA, { ...cfg, trend: false }, wins, opts(), state.trendCustom)) nt.set(key(r), r);
   for (const r of rows) {
-    const a = bh.get('0050' + key(r)), b = bh.get('00631L' + key(r)), c = tr.get(key(r));
+    const a = bh.get(BASE + key(r)), b = bh.get(LEV + key(r)), c = tr.get(key(r));
     r.bh50Cagr = a?.cagr ?? null; r.bh50Mdd = a?.mdd ?? null; r.bh631Cagr = b?.cagr ?? null; r.bh631Mdd = b?.mdd ?? null;
     r.bh50Uw = a?.uw ?? null; r.bh631Uw = b?.uw ?? null;
     r.tr631Cagr = c?.cagr ?? null; r.tr631Mdd = c?.mdd ?? null; r.tr631Uw = c?.uw ?? null;
@@ -540,7 +605,7 @@ function renderRebalMulti(cfg, wins, title) {
 function runTrend() {
   if (state.mode === 'mc') { if (mcRunning && mcRunning.key === mcKey(mcRunning.compare)) return; mcToken++; renderMCIdle(); return; }
   if (state.mode === 'robust') return renderRobust();
-  if (!codes().length) { destroyCharts(); $('results').innerHTML = '<div class="warn">請至少選一檔 0050、00631L 或 00675L（大盤不能交易，不跑策略）。</div>'; return; }
+  if (!codes().length) { destroyCharts(); $('results').innerHTML = `<div class="warn">請至少選一檔 ${ORDER.slice(1).join('、')}（${SHORT[BENCH]}不能交易，不跑策略）。</div>`; return; }
   if (state.mode === 'period') {
     renderTrendPeriod(E.trendPeriod(DATA, codes(), state.start, state.end, opts(), state.trendCustom));
     return;
@@ -619,7 +684,7 @@ function renderPeriod(res) {
   if (!res.results.length) { $('results').innerHTML = html; return; }
 
   const poor = res.results.filter(r => r.stats.lots0 === 0);
-  if (poor.length) html += `<div class="warn">整張交易（一張 1000 股）：投入金額買不起一張 ${poor.map(r => `${SHORT[r.code]}（${money(r.stats.lotPrice)}）`).join('、')}，那幾檔整段都是現金。</div>`;
+  if (poor.length) html += `<div class="warn">${MK.lotText}：投入金額買不起一${MK.unit} ${poor.map(r => `${SHORT[r.code]}（${money(r.stats.lotPrice)}）`).join('、')}，那幾檔整段都是現金。</div>`;
   html += `<div class="cards">${res.results.map(r => {
     const s = r.stats;
     return `<article class="acard" style="--c:${color(r.code)}">
@@ -631,7 +696,7 @@ function renderPeriod(res) {
         <dt>最大回撤</dt><dd class="neg">${pct(s.mdd)}</dd>
         <dt>最長套牢</dt><dd>${uwShort(s)}</dd>
         <dt>期末金額</dt><dd>${money(s.final)}</dd>
-        ${s.lots0 != null ? `<dt>期初買進</dt><dd>${s.lots0 > 0 ? `${s.lots0.toLocaleString()} 張` : '<span class="neg">錢不夠買一張</span>'}<br><small style="color:var(--muted)">一張 ${money(s.lotPrice)}</small></dd>` : ''}
+        ${s.lots0 != null ? `<dt>期初買進</dt><dd>${s.lots0 > 0 ? `${s.lots0.toLocaleString()} ${MK.unit}` : `<span class="neg">錢不夠買一${MK.unit}</span>`}<br><small style="color:var(--muted)">一${MK.unit} ${money(s.lotPrice)}</small></dd>` : ''}
       </dl>
       <details class="more"><summary>更多指標</summary>
         <dl class="kv">
@@ -731,9 +796,9 @@ function renderMulti(rows, title) {
     ${row('最長', c => `<td class="n">${dur(dU[c].max)}</td>`)}
     ${row('期末還在套牢', c => `<td class="n">${pct(openShare(rows, c, 'uwOpen'), 0)}</td>`)}
     </tbody></table></div><p class="hint" style="margin-top:10px">${UW_HINT}「期末還在套牢」= 最長那次到期末還沒結束的區間比例。</p>`;
-  if (list.includes('0050') && list.length > 1) {
-    const others = list.filter(c => c !== '0050');
-    html += `<p class="hint" style="margin-top:10px">年化報酬勝過 0050 的比例：${others.map(c => `${SHORT[c]} <b>${pct(E.winRate(rows, c, '0050', 'cagr'), 0)}</b>`).join('、')}</p>`;
+  if (list.includes(BASE) && list.length > 1) {
+    const others = list.filter(c => c !== BASE);
+    html += `<p class="hint" style="margin-top:10px">年化報酬勝過 ${BASE} 的比例：${others.map(c => `${SHORT[c]} <b>${pct(E.winRate(rows, c, BASE, 'cagr'), 0)}</b>`).join('、')}</p>`;
   }
   html += `</section>`;
 
@@ -811,7 +876,7 @@ function renderTrendPeriod(res) {
   const shifted = R.filter(r => r.shiftedFrom);
   if (shifted.length) html += `<div class="warn">均線要先累積 ${Math.max(...shifted.map(r => Math.max(r.params.maFast, r.params.maSlow)))} 個交易日才算得出來，之前策略只能觀望，跟買進持有比不公平。所以這幾檔改從均線算得出來的那天開始（策略和買進持有同一天）：${shifted.map(r => `${SHORT[r.code]} ${r.shiftedFrom}`).join('、')}</div>`;
   const poor = R.filter(r => r.bh.lots0 === 0);
-  if (poor.length) html += `<div class="warn">整張交易（一張 1000 股）：投入金額買不起一張 ${poor.map(r => `${SHORT[r.code]}（${money(r.bh.lotPrice)}）`).join('、')}，策略和買進持有都只能放現金，報酬是 0。請提高投入金額。</div>`;
+  if (poor.length) html += `<div class="warn">${MK.lotText}：投入金額買不起一${MK.unit} ${poor.map(r => `${SHORT[r.code]}（${money(r.bh.lotPrice)}）`).join('、')}，策略和買進持有都只能放現金，報酬是 0。請提高投入金額。</div>`;
   if (!R.some(r => r.code === state.chartAsset)) state.chartAsset = R[0].code;
 
   html += `<div class="cards trend-cards">${R.map(r => {
@@ -862,7 +927,7 @@ function renderTrendPeriod(res) {
   const base = r.equity[0];
   const evRows = r.events.map(e => `<tr><td class="num">${e.date}</td><td>${ACT_LABEL[e.act]}${e.act === 2 ? ` 第 ${e.layer} 層` : ''}</td><td class="n">${e.price.toFixed(2)}</td><td class="n">${Math.round(e.lots).toLocaleString()}</td><td class="n">${(e.value / base).toFixed(2)}×</td></tr>`).join('');
   html += `<section class="card"><details ${r.events.length <= 12 ? 'open' : ''}><summary><b>${SHORT[r.code]} 進出紀錄（${r.events.length} 次）</b></summary>
-    ${r.events.length ? `<div class="tbl-wrap"><table class="ev"><thead><tr><th>日期</th><th style="text-align:left">動作</th><th>收盤價</th><th>持有張數</th><th>當時淨值</th></tr></thead><tbody>${evRows}</tbody></table></div>`
+    ${r.events.length ? `<div class="tbl-wrap"><table class="ev"><thead><tr><th>日期</th><th style="text-align:left">動作</th><th>收盤價</th><th>持有${MK.unit}數</th><th>當時淨值</th></tr></thead><tbody>${evRows}</tbody></table></div>`
       : '<p class="hint">這段期間沒有任何進出。</p>'}
     <p class="hint">參數：快線 ${r.params.maFast}、慢線 ${r.params.maSlow}、出場乘數 ${r.params.exitBuffer}、接刀間距 ${r.params.pyramidGap}、${r.params.pyramidLevels} 層、轉回斜率 ${r.params.recoverSlope}、強反彈 ${r.params.recoverStrong}</p>
   </details></section>`;
@@ -1121,7 +1186,7 @@ function renderRobust() {
       if (v === E.TREND_DEFAULTS[lev][k]) delete state.trendCustom[lev][k]; else state.trendCustom[lev][k] = v;
     }
     buildParams(); save(); run();
-    $('status').textContent = `已套用：${comboText(sw, sw.combos[sg.i])}（${lev === 2 ? '正2：00631L、00675L 共用' : '0050'}的均線參數）`;
+    $('status').textContent = `已套用：${comboText(sw, sw.combos[sg.i])}（${lev === 2 ? `正2：${MK.levs.join('、')}${MK.levs.length > 1 ? ' 共用' : ''}` : BASE}的均線參數）`;
   });
   document.querySelector('table.heat').addEventListener('click', e => { const td = e.target.closest('td[data-i]'); if (td) $('robCell').textContent = tip(rows[+td.dataset.i]); });
 
@@ -1164,7 +1229,7 @@ function renderMCIdle() {
 
 async function runMC(compare) {
   if (state.strategy === 'rebal') return runRbMC(compare);
-  if (!codes().length) { $('results').innerHTML = '<div class="warn">請至少選一檔 0050、00631L 或 00675L。</div>'; return; }
+  if (!codes().length) { $('results').innerHTML = `<div class="warn">請至少選一檔 ${ORDER.slice(1).join('、')}。</div>`; return; }
   const token = ++mcToken; mcRunning = { key: mcKey(compare), compare };
   const blocks = compare ? [1, 20, 60, 120, 250] : [state.mcBlock];
   const n = compare ? Math.min(state.mcN, 1000) : state.mcN;
@@ -1235,13 +1300,13 @@ function renderRbMC(m) {
     <p class="hint">${esc(cfgLabel(m.cfg))} · 取樣 ${o.from}～${o.to}${state.useSyn ? '（含上市前模擬）' : '（只用真實資料）'}。模擬行情沒有日曆，「每季」用 63 個交易日近似。</p>
     <p class="hint">你的設定 vs ${vs}</p>
     ${rebalCompareTable(sets)}</section>
-    <section class="card"><h3>每一條模擬：0050 買進持有 vs 再平衡策略（年化報酬）</h3><div class="chart-box" id="cScatter"></div>
-    <p class="hint">虛線上方 = 那條行情再平衡策略賺得比 0050 買進持有多。</p></section>`;
+    <section class="card"><h3>每一條模擬：${BASE} 買進持有 vs 再平衡策略（年化報酬）</h3><div class="chart-box" id="cScatter"></div>
+    <p class="hint">虛線上方 = 那條行情再平衡策略賺得比 ${BASE} 買進持有多。</p></section>`;
   const step = Math.max(1, Math.ceil(n / 2000));
   charts.scatter = new ScatterChart($('cScatter'), {
-    series: [{ name: '再平衡', color: css('--text'), pts: rows.filter((_, i) => i % step === 0).map(r => ({ x: r.bhCagr * 100, y: r.cagr * 100, label: `0050 持有 ${(r.bhCagr * 100).toFixed(1)}%` })) }],
+    series: [{ name: '再平衡', color: css('--text'), pts: rows.filter((_, i) => i % step === 0).map(r => ({ x: r.bhCagr * 100, y: r.cagr * 100, label: `${BASE} 持有 ${(r.bhCagr * 100).toFixed(1)}%` })) }],
     xNumeric: true, square: true, diagonal: true, xFmt: v => Math.round(v) + '%', yFmt: v => Math.round(v) + '%',
-    xLabel: '0050 持有年化 →', yLabel: '↑ 再平衡年化', tipFmt: v => (v > 0 ? '+' : '') + v.toFixed(1) + '%', ariaLabel: '散布圖',
+    xLabel: `${BASE} 持有年化 →`, yLabel: '↑ 再平衡年化', tipFmt: v => (v > 0 ? '+' : '') + v.toFixed(1) + '%', ariaLabel: '散布圖',
   });
 }
 function renderRbMCCompare(m) {
@@ -1250,7 +1315,7 @@ function renderRbMCCompare(m) {
   const q = (a, p) => E.quantile([...a].sort((x, y) => x - y), p);
   $('results').innerHTML = `<section class="card"><h3>各種區塊長度比較（每組 ${m.n.toLocaleString()} 條 ${m.years} 年）</h3>
     <p class="hint">${esc(cfgLabel(m.cfg))}。「你的設定」那欄：年化中位數，下面是回撤中位數與最長套牢中位數；其他欄：報酬贏過對照組的機率，下面是回撤比較小、套牢比較短的機率。</p>
-    <div class="tbl-wrap"><table class="cmp-tbl"><thead><tr><th>每段</th><th>你的設定</th>${m.out[0].rows[0]?.noTrCagr !== undefined ? '<th>vs 不搭配均線</th>' : ''}<th>vs 不再平衡</th><th>vs 0050 持有</th><th>vs 00631L 均線</th></tr></thead><tbody>
+    <div class="tbl-wrap"><table class="cmp-tbl"><thead><tr><th>每段</th><th>你的設定</th>${m.out[0].rows[0]?.noTrCagr !== undefined ? '<th>vs 不搭配均線</th>' : ''}<th>vs 不再平衡</th><th>vs ${BASE} 持有</th><th>vs ${LEV} 均線</th></tr></thead><tbody>
     ${m.out.map(o => { const r = o.rows; return `<tr><td class="lbl">${BLOCK_LABEL[o.block]}</td>
       <td class="n pair"><b>${pct(q(r.map(x => x.cagr), .5), 1, true)}</b><small>${pct(q(r.map(x => x.mdd), .5), 0)} · ${dur(q(r.map(x => x.uw), .5))}</small></td>
       ${[...(r[0]?.noTrCagr !== undefined ? [['noTrCagr', 'noTrMdd', 'noTrUw']] : []), ['flatCagr', 'flatMdd', 'flatUw'], ['bhCagr', 'bhMdd', 'bhUw'], ['trCagr', 'trMdd', 'trUw']].map(([c, d, u]) => `<td class="n pair"><b>${pc(r, x => x.cagr > x[c])}</b><small>回撤小 ${pc(r, x => x.mdd > x[d])}<br>套牢短 ${pc(r, x => x.uw < x[u])}</small></td>`).join('')}</tr>`; }).join('')}
@@ -1270,7 +1335,7 @@ function renderMC(m) {
     return { code: o.code, cagr: c, mdd: bh ? r.bhMdd : r.mdd, total: (1 + c) ** years - 1 };
   });
   let html = `<section class="card"><h3>${n.toLocaleString()} 條 ${years} 年模擬行情 · 每段${BLOCK_LABEL[block] ?? block + ' 天'}</h3>
-    <p class="hint">取樣歷史：${out.map(o => `${SHORT[o.code]} ${o.source.from}～${o.source.to}`).join('、')}${state.useSyn ? '（含上市前模擬）' : '（只用真實資料）'}。每條都扣手續費與證交稅。</p>
+    <p class="hint">取樣歷史：${out.map(o => `${SHORT[o.code]} ${o.source.from}～${o.source.to}`).join('、')}${state.useSyn ? '（含上市前模擬）' : '（只用真實資料）'}。每條都扣${MARKET === 'us' ? '手續費（美股沒有證交稅），配息扣 30% 預扣稅' : '手續費與證交稅'}。</p>
     ${list.map(c => { const s = sums[c]; return `<div style="margin-top:14px"><b style="font-size:14px">${LABEL[c]}</b><div class="kpis">
       <div class="kpi" style="--c:${color(c)}"><div class="t">策略報酬贏的機率</div><div class="v">${pct(s.win, 0)}</div><div class="s">${years} 年後年化報酬比較高</div></div>
       <div class="kpi" style="--c:${color(c)}"><div class="t">年化多賺（中位數）</div><div class="v ${cls(s.diff50)}">${(s.diff50 * 100 > 0 ? '+' : '') + (s.diff50 * 100).toFixed(1)}</div><div class="s">百分點；5%～95%：${(s.diff5 * 100).toFixed(1)}～${(s.diff95 * 100).toFixed(1)}</div></div>
@@ -1349,17 +1414,19 @@ async function checkForUpdate() {
 // ---------- 啟動 ----------
 async function main() {
   restore();
+  setupMarket();
+  try { localStorage.setItem(MARKET_KEY, MARKET); } catch (_) { /* 無痕模式 */ }
   $('buildVer').textContent = BUILD_HASH ? `網頁版本 ${BUILD_DATE} · ${BUILD_HASH}` : '網頁版本（未標記）';
   $('updateBanner').addEventListener('click', () => location.reload());
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkForUpdate(); });
   setInterval(checkForUpdate, 30 * 60 * 1000);
   try {
-    const res = await fetch('data/returns.json', { cache: 'no-cache' });
+    const res = await fetch(MK.file, { cache: 'no-cache' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     DATA = E.prepare(await res.json());
   } catch (err) {
     $('updated').textContent = '資料載入失敗';
-    $('results').innerHTML = `<div class="warn">讀不到資料檔 data/returns.json（${esc(err.message)}）。請稍後重新整理。</div>`;
+    $('results').innerHTML = `<div class="warn">讀不到資料檔 ${MK.file}（${esc(err.message)}）。請稍後重新整理。</div>`;
     return;
   }
   $('updated').textContent = `資料更新至 ${DATA.updated}`;

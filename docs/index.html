@@ -3,21 +3,21 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>台股回測</title>
-<meta name="description" content="大盤、0050、00631L、00675L 買進持有回測：自訂區間、滾動區間、隨機區間">
+<title>台股／美股回測</title>
+<meta name="description" content="台股（大盤、0050、00631L、00675L）與美股（Nasdaq-100、QQQ、QLD）回測：買進持有、均線趨勢、再平衡">
 <meta name="theme-color" content="#f6f5f1" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#16181d" media="(prefers-color-scheme: dark)">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231d4ed8'/%3E%3Cpath d='M6 22l6-7 5 4 9-11' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=fb0fe6c16c">
+<link rel="stylesheet" href="style.css?v=d9b62b5b0a">
 </head>
 <body>
 <button class="update-banner" id="updateBanner" type="button" hidden>🔄 有新版本，點這裡更新</button>
 <header class="top">
   <div class="wrap">
-    <h1>台股回測</h1>
+    <h1 id="title">台股回測</h1>
     <p class="sub"><span id="stratName">買進持有</span> · <span id="updated">載入資料中…</span></p>
   </div>
 </header>
@@ -25,6 +25,13 @@
 <main class="wrap">
   <section class="card" aria-labelledby="h-settings">
     <h2 id="h-settings">設定</h2>
+    <div class="field">
+      <span class="label">市場</span>
+      <div class="seg wide" id="marketSeg">
+        <button type="button" data-m="tw" aria-pressed="true">台股（新台幣）</button>
+        <button type="button" data-m="us" aria-pressed="false">美股（美元）</button>
+      </div>
+    </div>
     <div class="field">
       <span class="label">策略</span>
       <div class="seg wide" id="strategySeg">
@@ -39,10 +46,10 @@
     </div>
     <div class="grid2">
       <label class="field">
-        <span class="label">投入金額（元）</span>
+        <span class="label" id="capitalLabel">投入金額（元）</span>
         <input id="capital" type="text" inputmode="numeric" value="1,000,000">
       </label>
-      <label class="field">
+      <label class="field" id="discountField">
         <span class="label">手續費折扣</span>
         <select id="discount">
           <option value="1">不打折（0.1425%）</option>
@@ -53,6 +60,17 @@
           <option value="0">免手續費</option>
         </select>
       </label>
+      <label class="field" id="usCommField" hidden>
+        <span class="label">手續費率 %（0 = 免手續費）</span>
+        <input id="usComm" type="number" min="0" max="2" step="0.01" inputmode="decimal" value="0">
+      </label>
+    </div>
+    <div class="grid2" id="usFeeRow" hidden>
+      <label class="field">
+        <span class="label">每筆最低手續費（美元）</span>
+        <input id="usMinFee" type="number" min="0" max="100" step="0.5" inputmode="decimal" value="0">
+      </label>
+      <p class="hint" style="align-self:end">美股沒有證交稅。配息先預扣 30% 稅，實際入帳 70%。一次可以買 1 股。</p>
     </div>
     <label class="switch">
       <input id="useSyn" type="checkbox" checked>
@@ -111,7 +129,7 @@
       </label>
       <button class="btn" id="resetParams" type="button">恢復預設</button>
     </div>
-    <p class="hint">只影響 0050：除息那天股價下跌，均線看得到。損益一律含配息。</p>
+    <p class="hint" id="signalHint">只影響 0050：除息那天股價下跌，均線看得到。損益一律含配息。</p>
   </section>
 
   <nav class="tabs" role="tablist" aria-label="回測方式">
@@ -175,7 +193,7 @@
     <p class="hint" style="margin:0 0 12px">均線參數是看過去行情設的，可能只是剛好貼合過去。這裡把兩個參數各換一排值、其他照上面的設定，每一組都從同一天開始跑到最新，看你的設定附近是不是一片差不多好的「高原」，以及用前一段歷史挑參數，後一段還好不好。</p>
     <div class="grid2">
       <label class="field"><span class="label">標的</span>
-        <select id="robAsset"><option value="00631L">00631L 台灣50正2</option><option value="00675L">00675L 加權正2</option><option value="0050">0050</option></select></label>
+        <select id="robAsset"></select></label>
       <label class="field"><span class="label">掃描哪兩個參數</span>
         <select id="robGrid"><option value="exit">快線 × 出場乘數</option><option value="pyramid">接刀間距 × 層數</option><option value="recover">轉回斜率 × 強反彈</option></select></label>
     </div>
@@ -343,11 +361,25 @@
       </ul>
     </details>
 
+    <details id="usGuide">
+      <summary>10. 美股（QQQ、QLD）</summary>
+      <p>最上面「市場」切到美股，就是另一套獨立的回測：資料、幣別、設定都跟台股分開（各自記住），兩邊不能放在同一個配置裡。三種策略、五種回測方式都一樣能用，規則跟台股相同，只有下面這些不同：</p>
+      <dl class="doc">
+        <dt>標的</dt><dd><b>Nasdaq-100（含息）</b>：比較基準，跟台股的大盤一樣不能交易、不扣成本。<b>QQQ</b>：追蹤 Nasdaq-100 的 1 倍 ETF（1999-03-10 上市）。<b>QLD</b>：每日 2 倍 Nasdaq-100（2006-06-21 上市）。均線參數 QQQ 用「1 倍」那組、QLD 用「正2」那組（跟台股共用同一張參數卡片，數值各自記住）。</dd>
+        <dt>幣別</dt><dd>全部用<b>美元</b>計算，不換算台幣，所以結果不含匯率漲跌。投入金額預設 3 萬美元。</dd>
+        <dt>交易單位</dt><dd><b>一次 1 股</b>（不是一張 1000 股）：買「錢夠買的最多股數」，不滿一股的錢留現金。價格用當時的實際收盤價（QQQ、QLD 的歷次分割都已還原；分割前的 1 股 = 分割前實際的 1 股）。</dd>
+        <dt>手續費</dt><dd>手續費率預設 0（大多數美國券商免手續費）；用複委託的話填券商的費率和每筆最低。沒有證交稅。成本四捨五入到 0.01 美元。再平衡時單筆不到 30 美元的小調整跳過。</dd>
+        <dt>配息預扣 30%</dt><dd>台灣人領美股配息會先被預扣 30% 稅，這裡配息一律只入帳 70%（包含買進持有、均線、再平衡、蒙地卡羅）。比較基準 Nasdaq-100（含息）是指數，照 100% 配息算，所以 QQQ 長期會比它低一點（費用 + 預扣稅）。</dd>
+        <dt>資料與模擬</dt><dd>Yahoo Finance 的每日收盤（含配息、分割紀錄），每個交易日自動更新。Nasdaq-100 指數 1985 年 10 月起；含息報酬指數之前的年份用價格指數 + 估計股息。QQQ 上市前 = 指數含息報酬 + 每年差距；QLD 上市前 = 2 × 指數含息日報酬 + 每年常數，都用上市後的真實資料校正到累積報酬一致（校正結果在「9. 資料來源」那一段，切到美股時顯示美股的）。2000 年網路泡沫 QLD（模擬）會跌超過 95%，可以用來看最壞情況。</dd>
+        <dt>沒有的東西</dt><dd>美股沒有「模擬段：台灣50 每年贏大盤」這個開關。美股盤後不能用收盤價成交，這裡跟台股一樣假設收盤價成交（實務上可以用收盤前的市價單接近）。</dd>
+      </dl>
+    </details>
+
     <p class="hint" id="buildVer"></p>
     <p class="hint">僅供研究參考，不構成投資建議。原始碼：<a href="https://github.com/kurochu888/twbt">github.com/kurochu888/twbt</a></p>
   </section>
 </main>
 
-<script type="module" src="app.js?v=fb0fe6c16c"></script>
+<script type="module" src="app.js?v=d9b62b5b0a"></script>
 </body>
 </html>

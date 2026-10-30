@@ -3,6 +3,7 @@ data/twbt.db
 data/twbt.db.tmp
 data/raw/
 data/adjusted/
+data/adjusted_us/
 .venv/
 __pycache__/
 *.pyc

@@ -6,6 +6,7 @@
 - 結束日（含）之前最後一個交易日，以收盤價全部賣出（扣手續費與證交稅）
 - 手續費、證交稅四捨五入到整數元
 - 大盤（TAIEX）是比較基準，不能交易：不扣成本、不分張數
+美股（data_dir = data/adjusted_us）：美元、一次 1 股、預設免手續費、配息預扣 30%，比較基準是 Nasdaq-100 含息指數
 """
 from __future__ import annotations
 
@@ -14,20 +15,22 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .costs import TaiwanCost
-from .data import KIND, NAMES, load_returns, load_signal_inputs
+from .costs import TaiwanCost, default_cost
+from .data import KIND, MARKETS, NAMES, load_returns, load_signal_inputs, market_of
 from .lots import LotAccount, load_lot_inputs
 from .metrics import TRADING_DAYS, summarize, uw_stats
 
 
 class BuyHold:
     def __init__(self, data_dir: str | Path, use_synthetic: bool = True,
-                 capital: float = 1_000_000, cost: TaiwanCost | None = None, rf: float = 0.0,
+                 capital: float | None = None, cost: TaiwanCost | None = None, rf: float = 0.0,
                  tw50_excess: bool = True):
+        self.market = market_of(data_dir)
+        self.mk = MARKETS[self.market]
         self.rets, self.syn = load_returns(data_dir, use_synthetic, tw50_excess)
         self.data_dir, self.tw50_excess = data_dir, tw50_excess
-        self.capital = capital
-        self.cost = cost or TaiwanCost()
+        self.capital = capital if capital is not None else self.mk["capital"]   # 台股 100 萬元、美股 3 萬美元
+        self.cost = cost or default_cost(self.market)
         self.rf = rf
         self.use_synthetic = use_synthetic
         self.price_ret, traded = load_signal_inputs(data_dir, self.rets, self.syn, tw50_excess)

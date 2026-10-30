@@ -13,6 +13,8 @@
 - 整張交易（一張 = 1000 股）：每一檔調到「最接近目標金額的張數」（四捨五入），買的時候現金不夠就少買；
   配息發現金，下次再平衡時一起調
 
+美股（data/adjusted_us）：配置 {"QQQ": w, "QLD": w, "CASH": w}，一次 1 股、單筆不到 30 美元的小調整跳過。
+
 搭配均線訊號（trend=True）：正2（00631L、00675L）的目標比例 = 配置比例 × 均線狀態
   （續抱 = 1、接刀已接 k 層 = k ÷ 層數、觀望或剛出場 = 0），不在正2 的部分放現金。
   均線有動作（出場／接刀／轉回續抱）那天，只把那一檔調到新的目標；平常照 rule 再平衡。
@@ -25,16 +27,16 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from .data import KIND
+from .data import KIND, LEVERAGE, MARKETS
 from .lots import LotAccount
 from .metrics import TRADING_DAYS, summarize, uw_stats
 from .trend import HOLD, WAIT, TrendBacktest
 
-ASSETS = ["0050", "00631L", "00675L"]
-LEVERAGED = {"00631L", "00675L"}
-EXPOSURE = {"0050": 1.0, "00631L": 2.0, "00675L": 2.0, "CASH": 0.0}
+ASSETS = MARKETS["tw"]["rebal"]
+LEVERAGED = {c for c, v in LEVERAGE.items() if v >= 2}
+EXPOSURE = {**{c: float(v) for c, v in LEVERAGE.items() if KIND[c] != "index"}, "CASH": 0.0}
 FREQ_NAME = {"none": "不定期", "M": "每月", "Q": "每季", "H": "每半年", "Y": "每年"}
-MIN_TRADE = 1000      # 再平衡時單筆不到 1,000 元就不交易（不然最低手續費 20 元會吃掉小額調整，現實中也沒人這樣做）
+MIN_TRADE = 1000      # 再平衡時單筆不到 1,000 元就不交易（不然最低手續費 20 元會吃掉小額調整，現實中也沒人這樣做）；美股 30 美元
 
 
 @dataclass
@@ -105,6 +107,7 @@ class RebalBacktest:
         w = cfg.norm()
         codes = [c for c in w if c != "CASH"]
         cost, capital = self.bh.cost, self.bh.capital
+        MIN_TRADE = self.bh.mk["min_trade"]
         acct = {c: LotAccount(0.0, cost, KIND[c]) for c in codes}   # 每一檔的股數（現金統一放 cash）
         LP = {c: self.lots[c]["lp"] for c in codes}
         LOT = {c: self.lots[c]["lot"] for c in codes}

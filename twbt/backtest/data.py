@@ -9,7 +9,17 @@ import pandas as pd
 
 from ..data.synthetic import year_frac
 
-ASSETS = ["TAIEX", "0050", "00631L", "00675L"]
+# 兩個市場各自一份資料（日期、幣別都不同），不能混在一起回測。
+# 台股：data/adjusted、新台幣、一張 1000 股；美股：data/adjusted_us、美元、一次 1 股、配息預扣 30%
+MARKETS = {
+    "tw": {"assets": ["TAIEX", "0050", "00631L", "00675L"], "bench": "TAIEX", "currency": "TWD",
+           "lot": 1000, "tick": 10.0, "cost_unit": 1.0, "min_trade": 1000.0, "capital": 1_000_000,
+           "base": "0050", "lev": "00631L", "rebal": ["0050", "00631L", "00675L"]},
+    "us": {"assets": ["NDX", "QQQ", "QLD"], "bench": "NDX", "currency": "USD",
+           "lot": 1, "tick": 0.01, "cost_unit": 0.01, "min_trade": 30.0, "capital": 30_000,
+           "base": "QQQ", "lev": "QLD", "rebal": ["QQQ", "QLD"]},
+}
+ASSETS = MARKETS["tw"]["assets"]
 # 網頁的 returns.json 把每日報酬存成「× SCALE 取整數」。Python 這邊讀進來也量化成一樣的值，
 # 兩邊的輸入逐位元相同，「夠不夠買一張」這類剛好卡在邊界的判斷才不會因為小數點後第 10 位不同而分岔。
 SCALE = 1e10
@@ -20,9 +30,24 @@ def quantize(x):
     return np.round(x * SCALE) / SCALE
 
 
-NAMES = {"TAIEX": "大盤（含息）", "0050": "0050", "00631L": "00631L 台灣50正2", "00675L": "00675L 加權正2"}
+NAMES = {"TAIEX": "大盤（含息）", "0050": "0050", "00631L": "00631L 台灣50正2", "00675L": "00675L 加權正2",
+         "NDX": "Nasdaq-100（含息）", "QQQ": "QQQ", "QLD": "QLD 那斯達克正2"}
 # 證交稅類別：index 是比較基準、不能直接交易，不收任何成本
-KIND = {"TAIEX": "index", "0050": "etf", "00631L": "etf", "00675L": "etf"}
+KIND = {"TAIEX": "index", "0050": "etf", "00631L": "etf", "00675L": "etf",
+        "NDX": "index", "QQQ": "etf", "QLD": "etf"}
+# 槓桿倍數（均線預設參數、再平衡曝險用）
+LEVERAGE = {"TAIEX": 1, "0050": 1, "00631L": 2, "00675L": 2, "NDX": 1, "QQQ": 1, "QLD": 2}
+# 配息預扣稅：台灣人領美股 ETF 配息預扣 30%（實際入帳 = 配息 × 70%）
+DIV_TAX = {"QQQ": 0.30, "QLD": 0.30}
+
+
+def market_of(data_dir: str | Path) -> str:
+    """看資料夾裡有哪個比較基準的長期序列，判斷是台股還是美股。"""
+    d = Path(data_dir) / "long"
+    for m, info in MARKETS.items():
+        if (d / f"{info['bench']}_long.csv").exists():
+            return m
+    return "tw"
 
 
 def load_returns(data_dir: str | Path, use_synthetic: bool = True,
@@ -34,10 +59,12 @@ def load_returns(data_dir: str | Path, use_synthetic: bool = True,
         校正差距（這段差距主要來自 2010 年後的台積電，不一定適用更早的年代）。
     """
     d = Path(data_dir) / "long"
+    mk = MARKETS[market_of(data_dir)]
+    bench = mk["bench"]
     rets, syn = {}, {}
-    m = pd.read_csv(d / "TAIEX_long.csv", index_col=0, parse_dates=True)
-    rets["TAIEX"], syn["TAIEX"] = m["tr_ret"], m["is_synthetic"]
-    for code in ASSETS[1:]:
+    m = pd.read_csv(d / f"{bench}_long.csv", index_col=0, parse_dates=True)
+    rets[bench], syn[bench] = m["tr_ret"], m["is_synthetic"]
+    for code in mk["assets"][1:]:
         x = pd.read_csv(d / f"{code}_long.csv", index_col=0, parse_dates=True)
         rets[code], syn[code] = x["ret"], x["is_synthetic"]
     r = pd.DataFrame(rets).sort_index().astype(float)
@@ -47,7 +74,7 @@ def load_returns(data_dir: str | Path, use_synthetic: bool = True,
         start = syn[c].index.min()
         s.loc[s.index < start, c] = 1
     s = s.fillna(0).astype(int)
-    if not tw50_excess:
+    if not tw50_excess and bench == "TAIEX":
         p = json.loads((d / "params.json").read_text(encoding="utf-8"))
         mkt = r["TAIEX"]
         pre50 = s["0050"] == 1
@@ -81,7 +108,7 @@ def load_signal_inputs(data_dir: str | Path, rets: pd.DataFrame, syn: pd.DataFra
     d = Path(data_dir) / "long"
     price = rets.copy()
     traded = pd.DataFrame(True, index=rets.index, columns=rets.columns)
-    for code in ASSETS[1:]:
+    for code in MARKETS[market_of(data_dir)]["assets"][1:]:
         x = pd.read_csv(d / f"{code}_long.csv", index_col=0, parse_dates=True)
         x.index = pd.DatetimeIndex(x.index).astype("datetime64[ns]")
         traded[code] = rets.index.isin(x.index)
