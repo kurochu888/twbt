@@ -8,6 +8,8 @@
 配息（div）：除息那天每股發多少現金 = 前一天價格 × (總報酬 − 價格報酬) ÷ (1 + 總報酬)
     （總報酬 = 收盤 ÷ 除息參考價、價格報酬 = 收盤 ÷ 前一天收盤，兩式相減剛好是配息金額）。
     0050 上市前的模擬段每天都有一點股息（年化約 3.5%）。正2 不配息。
+    美股配息預扣 30%：div 已經是扣稅後實際入帳的金額（data.DIV_TAX）。
+美股（data/adjusted_us）：一次 1 股（lot = 1）、每股金額四捨五入到 0.01 美元，分割照 adjusted_us/splits.csv。
 """
 from __future__ import annotations
 
@@ -32,15 +34,18 @@ def load_lot_inputs(data_dir: str | Path, rets: pd.DataFrame, price_ret: pd.Data
     rets：每日總報酬；price_ret：不含配息的價格報酬（load_signal_inputs 的第一個結果）；syn：是否模擬（決定哪段是真實價格）。
     """
     from ..data.adjust import load_splits
+    from .data import DIV_TAX, KIND, MARKETS, market_of
     d = Path(data_dir)
+    mk = MARKETS[market_of(d)]
+    unit, tick = float(mk["lot"]), float(mk["tick"])
     idx = rets.index
     try:
-        splits = load_splits()
+        splits = pd.read_csv(d / "splits.csv") if (d / "splits.csv").exists() else load_splits()
     except Exception:                        # noqa: BLE001
         splits = pd.DataFrame(columns=["code", "resume_date", "ratio"])
     out = {}
     for code in rets.columns:
-        if code == "TAIEX":
+        if KIND.get(code) == "index":
             continue
         raw = d / f"{code}.csv"
         last = float(pd.read_csv(raw, usecols=["close"])["close"].iloc[-1]) if raw.exists() else 1.0
@@ -53,7 +58,7 @@ def load_lot_inputs(data_dir: str | Path, rets: pd.DataFrame, price_ret: pd.Data
             if np.isnan(s[t]) or np.isnan(px[t]):
                 break
             px[t - 1] = px[t] / (1 + s[t])
-        lot = np.full(n, float(LOT))
+        lot = np.full(n, unit)
         for _, x in splits[splits["code"].astype(str) == code].iterrows():
             rd = pd.Timestamp(x["resume_date"])
             if rd <= idx[-1]:                 # 資料範圍之後的分割不算
@@ -65,11 +70,14 @@ def load_lot_inputs(data_dir: str | Path, rets: pd.DataFrame, price_ret: pd.Data
             first_real = idx.get_loc(real_days[0]) - 1 if len(real_days) else n
         for t in range(max(first_real, 0), n):
             if not np.isnan(lp[t]):
-                lp[t] = math.floor(lp[t] / 10 + 0.5) * 10          # 真實期間：實際成交價 × 1000
+                lp[t] = math.floor(lp[t] / tick + 0.5) * tick      # 真實期間：實際成交價（到分）× 每張股數
         div = np.zeros(n)
+        keep = 1.0 - DIV_TAX.get(code, 0.0)                   # 配息扣掉預扣稅後實際入帳的比例
         for t in range(1, n):
             if not (np.isnan(r[t]) or np.isnan(s[t]) or np.isnan(px[t - 1])) and r[t] != s[t]:
                 div[t] = px[t - 1] * (r[t] - s[t]) / (1 + r[t])
+                if keep != 1.0:
+                    div[t] *= keep
         out[code] = {"px": px, "lot": lot, "lp": lp, "div": div}
     return out
 

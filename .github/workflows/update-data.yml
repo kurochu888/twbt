@@ -41,14 +41,20 @@ jobs:
       - name: 下載新資料、重算還原價與網頁資料
         run: python -u scripts/update_core.py
 
+      - name: 美股：下載 Nasdaq-100、QQQ、QLD（Yahoo），重算網頁資料
+        # 美股失敗（例如 Yahoo 暫時連不上）不影響台股：照樣存台股，美股網頁資料維持上一次的版本
+        id: us
+        continue-on-error: true
+        run: python -u scripts/update_us.py
+
       - name: 有變動就存回 repo
         run: |
-          if git diff --quiet -- data/source docs; then
+          if git diff --quiet -- data/source data/source_us docs; then
             echo "資料沒有變動"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/source docs
+          git add data/source data/source_us docs
           git commit -m "每日資料更新 $(TZ=Asia/Taipei date +%Y-%m-%d)"
           git push

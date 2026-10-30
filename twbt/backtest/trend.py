@@ -35,7 +35,7 @@ import numpy as np
 import pandas as pd
 
 from .costs import TaiwanCost
-from .data import KIND
+from .data import KIND, LEVERAGE  # noqa: F401（LEVERAGE 給其他模組從這裡匯入）
 from .lots import LotAccount
 from .metrics import TRADING_DAYS, uw_stats
 
@@ -43,7 +43,6 @@ WATCH, HOLD, WAIT = 0, 1, 2
 NONE, RECOVER, ADD, EXIT = 0, 1, 2, 3
 STATUS_NAME = {WATCH: "觀望", HOLD: "續抱", WAIT: "接刀中"}
 ACTION_NAME = {RECOVER: "轉回續抱", ADD: "接刀", EXIT: "出場"}
-LEVERAGE = {"TAIEX": 1, "0050": 1, "00631L": 2, "00675L": 2}
 
 
 @dataclass
@@ -224,7 +223,7 @@ class TrendBacktest:
             if a and keep_events:
                 events.append({"日期": self.rets.index[t].date(), "動作": ACTION_NAME[int(a)]
                                + (f" 第 {int(layers[j])} 層" if a == ADD else ""),
-                               "價格": lp / 1000, "持有張數": acct.lots(lot), "淨值": acct.value(lp, lot)})
+                               "價格": lp / self.bh.mk["lot"], "持有張數": acct.lots(lot), "淨值": acct.value(lp, lot)})
             eq[t - si] = acct.value(lp, lot)
         # 期末賣出（扣成本），跟買進持有一樣
         eq[-1] = acct.final_value(LP[ei], LOT[ei])
@@ -234,7 +233,7 @@ class TrendBacktest:
     # ---------- 多區間 ----------
     def windows(self, wins, assets=None) -> pd.DataFrame:
         from .data import NAMES
-        assets = [a for a in (assets or list(self.rets.columns)) if a != "TAIEX" and a in self._sig]
+        assets = [a for a in (assets or list(self.rets.columns)) if KIND[a] != "index" and a in self._sig]
         rows = []
         for start, end in wins:
             try:

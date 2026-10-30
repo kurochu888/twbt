@@ -2,16 +2,24 @@ import json, random, sys, warnings
 warnings.simplefilter("ignore")
 import os; ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); sys.path.insert(0, ROOT)
 import numpy as np, pandas as pd
-from twbt.backtest import BuyHold, TaiwanCost
+from twbt.backtest import BuyHold, TaiwanCost, us_cost
+from twbt.backtest.data import MARKETS, NAMES
 from twbt.backtest.trend import TrendBacktest, TrendParams, LEVERAGE
 from twbt.backtest.rebalance import RebalBacktest, RebalConfig
 from twbt.backtest.metrics import summarize
 from twbt.backtest.robust import ParamSweep, GRIDS
 rnd = random.Random(int(sys.argv[2]))
+MARKET = os.environ.get("TWBT_MARKET", "tw")          # TWBT_MARKET=us：美股（data/adjusted_us）
+MK = MARKETS[MARKET]
+DATA = os.path.join(ROOT, "data/adjusted" if MARKET == "tw" else f"data/adjusted_{MARKET}")
+ALL, TRADE = MK["assets"], MK["assets"][1:]
+YEARS = ([1989, 1990, 1990, 1995, 2000, 2003, 2008, 2010, 2014, 2015, 2017, 2020, 2024, 2026, 2027] if MARKET == "tw"
+         else [1984, 1985, 1987, 1990, 1999, 2000, 2002, 2006, 2008, 2010, 2020, 2022, 2026, 2027])
+CAPS = [1_000_000, 50_000, 3_000_000] if MARKET == "tw" else [30_000, 2_000, 250_000]
 D2 = dict(maFast=120, maSlow=240, exitBuffer=0.90, recoverSlope=1.001, recoverStrong=1.02, pyramidGap=0.15, pyramidLevels=2)
 D1 = dict(maFast=100, maSlow=200, exitBuffer=0.925, recoverSlope=1.001, recoverStrong=1.02, pyramidGap=0.15, pyramidLevels=1)
 def rand_date():
-    y = rnd.choice([1989, 1990, 1990, 1995, 2000, 2003, 2008, 2010, 2014, 2015, 2017, 2020, 2024, 2026, 2027])
+    y = rnd.choice(YEARS)
     return f"{y}-{rnd.randint(1,12):02d}-{rnd.randint(1,28):02d}"
 def rand_params(lev):
     d = dict(D2 if lev == 2 else D1); c = {}
@@ -30,29 +38,32 @@ for k in range(int(sys.argv[3])):
     s, e = rand_date(), rand_date()
     if rnd.random() < 0.7 and s > e: s, e = e, s
     case = dict(type=t, start=s, end=e, syn=rnd.random() < 0.7, excess=rnd.random() < 0.7, disc=rnd.choice([1, 0.6, 0.28, 0]),
-                capital=rnd.choice([1_000_000, 50_000, 3_000_000]), sp=rnd.choice(["raw", "adjusted"]),
+                capital=rnd.choice(CAPS), sp=rnd.choice(["raw", "adjusted"]), market=MARKET,
+                comm=rnd.choice([0, 0, 0.001, 0.0025]), minfee=rnd.choice([0, 1, 4.95]),
                 custom={"1": rand_params(1), "2": rand_params(2)}, roll=rnd.choice([None, None, 3, 10, 20]))
     if t == "rebal":
-        w = {c: rnd.choice([0, 0, 10, 25, 50, 65]) / 100 for c in ("0050", "00631L", "00675L", "CASH")}
+        w = {c: rnd.choice([0, 0, 10, 25, 50, 65]) / 100 for c in (*MK["rebal"], "CASH")}
         if sum(w.values()) == 0: w["CASH"] = 1
         case.update(weights=w, freq=rnd.choice(["none", "M", "Q", "H", "Y"]), band=rnd.choice([0, 0, 0.03, 0.1]), cash=rnd.choice([0, 0.01, 0.02]), rtrend=rnd.random() < 0.5)
     cases.append(case)
 # 參數穩健性：另外 8 組（每組要跑幾十個參數，比較慢）
 ROB = {"exit": "均線出場", "pyramid": "接刀", "recover": "轉回"}
 for k in range(8):
-    cases.append(dict(type="robust", asset=rnd.choice(["0050", "00631L", "00675L"]), grid=rnd.choice(list(ROB)), syn=rnd.random() < 0.7,
-                      excess=rnd.random() < 0.7, disc=rnd.choice([1, 0.6, 0]), capital=rnd.choice([1_000_000, 300_000]), sp=rnd.choice(["raw", "adjusted"]),
+    cases.append(dict(type="robust", asset=rnd.choice(TRADE), grid=rnd.choice(list(ROB)), syn=rnd.random() < 0.7,
+                      excess=rnd.random() < 0.7, disc=rnd.choice([1, 0.6, 0]), capital=rnd.choice(CAPS[:2]), sp=rnd.choice(["raw", "adjusted"]),
+                      market=MARKET, comm=rnd.choice([0, 0.001]), minfee=rnd.choice([0, 1]),
                       custom={"1": rand_params(1), "2": rand_params(2)}, split=rnd.choice(["2005-01-01", "2010-01-01", "2018-06-01"]),
                       ws=rnd.choice(["1998-01-01", "2000-01-01", "2012-01-01"]), step=rnd.choice([2, 3, 5]), obj=rnd.choice(["cagr", "calmar"])))
 out = []
 for c in cases:
     r = {"case": c}
     try:
-        bh = BuyHold(os.path.join(ROOT, "data/adjusted"), use_synthetic=c["syn"], tw50_excess=c["excess"], cost=TaiwanCost(discount=c["disc"]), capital=c["capital"])
+        cost = TaiwanCost(discount=c["disc"]) if MARKET == "tw" else us_cost(c["comm"], c["minfee"])
+        bh = BuyHold(DATA, use_synthetic=c["syn"], tw50_excess=c["excess"], cost=cost, capital=c["capital"])
         params = {code: to_tp(2 if LEVERAGE[code] >= 2 else 1, c["custom"]["2" if LEVERAGE[code] >= 2 else "1"]) for code in bh.rets.columns}
         if c["type"] == "bh":
             res = {}
-            for code in ("TAIEX", "0050", "00631L", "00675L"):
+            for code in ALL:
                 try:
                     eq = bh.equity(code, c["start"], c["end"]); st = summarize(eq)
                     res[code] = [str(eq.index[0].date()), float(eq.iloc[-1]), st["最大回撤"], st["最長套牢"], str(st["回撤高點"]), str(st["回到前高"])]
@@ -61,7 +72,7 @@ for c in cases:
             if c["roll"]: w = bh.rolling(c["roll"]); r["roll"] = {k: [len(v), float(v["年化報酬"].median()), float(v["最長套牢"].median()), int(v["套牢未結束"].sum())] for k, v in w.groupby("標的")} if len(w) else {}
         elif c["type"] == "trend":
             tb = TrendBacktest(bh, params, signal_price=c["sp"]); res = {}
-            for code in ("0050", "00631L", "00675L"):
+            for code in TRADE:
                 try:
                     x = tb.run(code, c["start"], c["end"]); st = summarize(x.equity)
                     res[code] = [str(x.equity.index[0].date()), float(x.equity.iloc[-1]), st["最大回撤"], len(x.events), st["最長套牢"]]

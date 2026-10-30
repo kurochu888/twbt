@@ -1,6 +1,6 @@
-# twbt：台股回測工具組
+# twbt：台股（＋美股）回測工具組
 
-自己打造的台股回測工具，一步一步擴充。
+自己打造的台股回測工具，一步一步擴充。也能回測美股 QQQ、QLD（美元計價、獨立的一套資料）。
 
 ## 目前進度
 
@@ -11,6 +11,7 @@
 - [x] **蒙地卡羅測試**：區塊自助抽樣重組歷史報酬，檢驗策略贏買進持有有多穩（網頁「蒙地卡羅」分頁、`scripts/montecarlo.py`）
 - [x] **參數穩健性檢查**：均線參數掃描（熱力圖）、樣本內外、walk-forward，看預設參數是不是過度擬合（網頁「參數穩健性」分頁、`scripts/robustness.py`）
 - [x] **第 5 步：再平衡策略**：固定配置（0050／正2／現金）定期或依偏離門檻調回，可搭配均線訊號
+- [x] **美股 QQQ、QLD**：Nasdaq-100 含息當基準，美元計價、一次 1 股、配息預扣 30%，三種策略都能用（見下方「美股」）
 - [ ] 下一步：定期定額、股債配置（需要上櫃債券 ETF 資料）
 
 ## 怎麼用
@@ -204,9 +205,36 @@ s = ps.split_test("2010-01-01")       # s["排名相關係數"]、s["樣本內�
 w = ps.walk_forward("2000-01-01", 5)  # w["每段"]、w["淨值"]、w["摘要"]
 ```
 
+## 美股（QQQ、QLD）
+
+網頁最上面「市場」切到美股（或網址加 `?m=us`）；Python 用 `BuyHold("data/adjusted_us")`，其他策略、蒙地卡羅、參數穩健性的用法都一樣。
+兩個市場的日期、幣別都不同，**各自獨立**，不能放進同一個再平衡配置；網頁的設定也各自記住。
+
+| 標的 | 真實資料 | 模擬（上市前） | 模擬方式 |
+|---|---|---|---|
+| Nasdaq-100（含息） | 價格指數 1985-10-01 起 | 含息：1999-03 前 | 1999-03 起 = QQQ 含息報酬 + 內扣 0.20%/年（Yahoo 沒有 ^XNDX 完整歷史）；之前 = 價格指數 + 估計股息 |
+| QQQ | 1999-03-10 起 | 1985～1999 | 指數含息報酬 + 校正年化差距 |
+| QLD | 2006-06-21 起 | 1985～2006 | 2 × 指數含息日報酬 + 校正年化常數（以累積報酬校正） |
+
+跟台股不同的規則（`twbt/backtest/data.py` 的 `MARKETS`、`docs/engine.js` 的 `data.market`）：
+- **美元**計價，不換算台幣（結果不含匯率）；預設投入 3 萬美元
+- **一次 1 股**（台股一張 1000 股）；分割照 Yahoo 的紀錄（`data/adjusted_us/splits.csv`），分割前 1 股 = 分割前實際的 1 股
+- **手續費**預設 0，可設費率與每筆最低（`us_cost(0.001, 1.0)`）；沒有證交稅；成本四捨五入到 0.01 美元；再平衡單筆不到 30 美元跳過
+- **配息預扣 30%**：配息只入帳 70%（買進持有、均線、再平衡、蒙地卡羅都一樣）。基準 Nasdaq-100（含息）是指數，照全額配息
+- 均線預設參數：QQQ 用 1 倍那組、QLD 用正2 那組
+
+資料：`scripts/update_us.py` 用 yfinance 抓 Yahoo Finance（`data/source_us/` 放進 git），重算 `data/adjusted_us/` 與 `docs/data/returns_us.json`；
+每日排程跟台股一起跑，美股失敗不影響台股。只重算不下載：`python scripts/update_us.py --build-only`。
+
+```python
+from twbt.backtest import BuyHold, us_cost
+bh = BuyHold("data/adjusted_us", cost=us_cost(0.001, 1.0), capital=50_000)   # 複委託 0.1%、最低 1 美元
+stats, curves = bh.period("2000-01-01", "2026-10-30")
+```
+
 ## 驗證
 
-- `bash tools/crosscheck.sh`：隨機產生設定（三種策略、各種日期與參數），Python 版與網頁版各算一次，數字要完全一致（需要 Node.js），最後印出最大相對誤差（應該在 1e-15 左右）。
+- `bash tools/crosscheck.sh`（美股：`TWBT_MARKET=us bash tools/crosscheck.sh`）：隨機產生設定（三種策略、各種日期與參數），Python 版與網頁版各算一次，數字要完全一致（需要 Node.js），最後印出最大相對誤差（應該在 1e-15 左右）。
   兩邊的輸入逐位元相同：網頁的 `returns.json` 把每日報酬存成「× 1e10 取整數」，Python 讀資料時也量化成一樣的值（`twbt/backtest/data.py` 的 `quantize()`），
   所以「現金夠不夠買一張」這種剛好卡在邊界的判斷兩邊一定相同（以前輸入差 1e-9，免手續費＋模擬段時偶爾會差一張）。
 - `python -m unittest discover tests`：手算得出的離線測試。
