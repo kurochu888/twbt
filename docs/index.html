@@ -11,7 +11,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=42af09a952">
+<link rel="stylesheet" href="style.css?v=fb0fe6c16c">
 </head>
 <body>
 <button class="update-banner" id="updateBanner" type="button" hidden>🔄 有新版本，點這裡更新</button>
@@ -253,11 +253,11 @@
       <p>正2（00631L、00675L）和 1 倍（0050）各一組參數。改過的格子會變色，「恢復預設」全部改回去。</p>
       <dl class="doc">
         <dt>快線、慢線（日）</dt><dd>兩條簡單移動平均的天數（只算有交易的日子）。預設 正2 120／240、0050 100／200。</dd>
-        <dt>出場乘數</dt><dd>收盤跌破「快線 × 出場乘數」就全部賣出。0.90 = 跌破快線 10% 才出場；越接近 1 越早出場、但也越容易被洗掉。預設 正2 0.90、0050 0.95。</dd>
+        <dt>出場乘數</dt><dd>收盤跌破「快線 × 出場乘數」就全部賣出。0.90 = 跌破快線 10% 才出場；越接近 1 越早出場、但也越容易被洗掉。預設 正2 0.90、0050 0.925。</dd>
         <dt>接刀間距</dt><dd>出場後，收盤比「上次動作那天的收盤」和「慢線」兩者中較低的那個，再低多少就加碼一層。0.15 = 再跌 15%。</dd>
         <dt>接刀層數</dt><dd>出場時的現金分成幾份往下加碼。2 = 每次接一半。預設 正2 2 層、0050 1 層。</dd>
-        <dt>轉回斜率門檻</dt><dd>站回快線時，快線今天要 ≥ 昨天 × 這個數字才算轉強（1.002 = 快線一天至少上升 0.2%），避免快線還在往下時就買回。</dd>
-        <dt>強反彈倍數</dt><dd>收盤 > 快線 × 這個數字，就不管斜率直接買回。1.03 = 站上快線 3% 以上。</dd>
+        <dt>轉回斜率門檻</dt><dd>站回快線時，快線今天要 ≥ 昨天 × 這個數字才算轉強（1.001 = 快線一天至少上升 0.1%），避免快線還在往下時就買回。預設 1.001。</dd>
+        <dt>強反彈倍數</dt><dd>收盤 > 快線 × 這個數字，就不管斜率直接買回。1.02 = 站上快線 2% 以上。預設 1.02。</dd>
         <dt>均線看的價格</dt><dd>只影響 0050。「不還原配息」跟 finance-app 一樣：除息那天股價下跌，均線看得到。「還原權息」= 用含息價格算均線。不管選哪個，損益一律含配息。分割（0050 一拆四、00631L 一拆二十二）兩種都已還原。</dd>
       </dl>
       <p>交易一律用當天收盤價（盤後定價交易）。每檔標的各自一筆錢，彼此不影響。回測區間從中間開始時，照那天的狀態建立部位：續抱 = 全買、接刀已接 k 層 = 買 k ÷ 層數、觀望 = 先拿現金。結果圖上：▼ 出場、▲ 接刀、● 轉回續抱（進出超過 40 次就不標，縮短區間就看得到）。</p>
@@ -348,6 +348,6 @@
   </section>
 </main>
 
-<script type="module" src="app.js?v=42af09a952"></script>
+<script type="module" src="app.js?v=fb0fe6c16c"></script>
 </body>
 </html>

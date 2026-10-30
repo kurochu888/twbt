@@ -51,17 +51,17 @@ class TrendParams:
     ma_fast: int = 120
     ma_slow: int = 240
     exit_buffer: float = 0.90
-    recover_slope: float = 1.002
-    recover_strong: float = 1.03
+    recover_slope: float = 1.001
+    recover_strong: float = 1.02
     pyramid_gap: float = 0.15
     pyramid_levels: int = 2
 
     @classmethod
     def default(cls, leverage: float) -> "TrendParams":
-        """跟 app 的 defaultTrendParams() 相同。"""
+        """跟網頁的 defaultTrendParams() 相同。均線、接刀同 finance-app；0050 出場乘數、轉回兩個門檻照參數穩健性掃描調過。"""
         if leverage >= 2:
-            return cls(120, 240, 0.90, 1.002, 1.03, 0.15, 2)
-        return cls(100, 200, 0.95, 1.002, 1.03, 0.15, 1)
+            return cls(120, 240, 0.90, 1.001, 1.02, 0.15, 2)
+        return cls(100, 200, 0.925, 1.001, 1.02, 0.15, 1)
 
 
 def _sma(x: np.ndarray, w: int) -> np.ndarray:

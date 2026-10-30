@@ -425,8 +425,8 @@ export function winRate(rows, a, b, col = 'cagr') {
 // 規則照 kurochu888/finance-app 的 computeTrend()/runBacktest()，跟 twbt/backtest/trend.py 逐行對應。
 export const LEVERAGE = { TAIEX: 1, '0050': 1, '00631L': 2, '00675L': 2 };
 export const TREND_DEFAULTS = {
-  2: { maFast: 120, maSlow: 240, exitBuffer: 0.90, recoverSlope: 1.002, recoverStrong: 1.03, pyramidGap: 0.15, pyramidLevels: 2 },
-  1: { maFast: 100, maSlow: 200, exitBuffer: 0.95, recoverSlope: 1.002, recoverStrong: 1.03, pyramidGap: 0.15, pyramidLevels: 1 },
+  2: { maFast: 120, maSlow: 240, exitBuffer: 0.90, recoverSlope: 1.001, recoverStrong: 1.02, pyramidGap: 0.15, pyramidLevels: 2 },
+  1: { maFast: 100, maSlow: 200, exitBuffer: 0.925, recoverSlope: 1.001, recoverStrong: 1.02, pyramidGap: 0.15, pyramidLevels: 1 },
 };
 export const ACT = { NONE: 0, RECOVER: 1, ADD: 2, EXIT: 3 };
 export const STATUS = { WATCH: 0, HOLD: 1, WAIT: 2 };

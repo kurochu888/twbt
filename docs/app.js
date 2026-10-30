@@ -1,10 +1,10 @@
 // 介面：讀設定 → 呼叫 engine.js 計算 → 畫結果
-import * as E from './engine.js?v=42af09a952';
-import { LineChart, ScatterChart } from './plot.js?v=42af09a952';
+import * as E from './engine.js?v=fb0fe6c16c';
+import { LineChart, ScatterChart } from './plot.js?v=fb0fe6c16c';
 
 // 版本號：tools/stamp_version.py 自動蓋上（日期 · 程式內容的 hash，跟 finance-app 一樣不手動編號）
-const BUILD_HASH = '42af09a952';
-const BUILD_DATE = '2026-10-29';
+const BUILD_HASH = 'fb0fe6c16c';
+const BUILD_DATE = '2026-10-30';
 
 const ORDER = ['TAIEX', '0050', '00631L', '00675L'];
 const LABEL = { TAIEX: '大盤（含息）', '0050': '0050', '00631L': '00631L 台灣50正2', '00675L': '00675L 加權正2' };

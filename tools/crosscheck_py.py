@@ -8,8 +8,8 @@ from twbt.backtest.rebalance import RebalBacktest, RebalConfig
 from twbt.backtest.metrics import summarize
 from twbt.backtest.robust import ParamSweep, GRIDS
 rnd = random.Random(int(sys.argv[2]))
-D2 = dict(maFast=120, maSlow=240, exitBuffer=0.90, recoverSlope=1.002, recoverStrong=1.03, pyramidGap=0.15, pyramidLevels=2)
-D1 = dict(maFast=100, maSlow=200, exitBuffer=0.95, recoverSlope=1.002, recoverStrong=1.03, pyramidGap=0.15, pyramidLevels=1)
+D2 = dict(maFast=120, maSlow=240, exitBuffer=0.90, recoverSlope=1.001, recoverStrong=1.02, pyramidGap=0.15, pyramidLevels=2)
+D1 = dict(maFast=100, maSlow=200, exitBuffer=0.925, recoverSlope=1.001, recoverStrong=1.02, pyramidGap=0.15, pyramidLevels=1)
 def rand_date():
     y = rnd.choice([1989, 1990, 1990, 1995, 2000, 2003, 2008, 2010, 2014, 2015, 2017, 2020, 2024, 2026, 2027])
     return f"{y}-{rnd.randint(1,12):02d}-{rnd.randint(1,28):02d}"
