@@ -1,11 +1,11 @@
-"""下載並整理核心標的：大盤（加權指數、報酬指數）、0050、00631L、00675L。
+"""下載並整理核心標的：大盤（加權指數、報酬指數）、0050、00631L、00675L、00685L。
 
     python scripts/update_core.py              # 第一次：補齊全部歷史（約 1～2 小時，可中斷續跑）
     python scripts/update_core.py              # 之後：只補新月份（幾分鐘）
     python scripts/update_core.py --build-only # 不下載，只重新計算還原價
 
 輸出 data/adjusted/：
-    0050.csv、00631L.csv、00675L.csv：原始價、還原價、每日總報酬、事件
+    0050.csv、00631L.csv、00675L.csv、00685L.csv：原始價、還原價、每日總報酬、事件
     TAIEX.csv：加權指數 close、報酬指數 tr_close
 """
 from __future__ import annotations
@@ -27,12 +27,12 @@ from twbt.data.twse_hist import TwseClient  # noqa: E402
 
 TW = ZoneInfo("Asia/Taipei")
 # 標的 → 從哪個月開始抓（約略上市月份，更早的月份會回傳空資料）
-CORE = {"0050": "2010-01", "00631L": "2014-10", "00675L": "2017-05"}  # 證交所個股日K只到 2010-01-04
+CORE = {"0050": "2010-01", "00631L": "2014-10", "00675L": "2017-05", "00685L": "2017-04"}  # 證交所個股日K只到 2010-01-04
 TAIEX_START = "1990-01"   # 加權指數：盡量往前（更早沒資料的月份會自動略過）
 TRI_START = "2003-01"     # 報酬指數：2003 年起公布
 EXRIGHT_START = 2010
 # 判斷「異常跳動」的門檻：一般 10% 漲跌停；槓桿型給寬一點
-JUMP_LIMIT = {"0050": 0.105, "00631L": 0.21, "00675L": 0.21}
+JUMP_LIMIT = {"0050": 0.105, "00631L": 0.21, "00675L": 0.21, "00685L": 0.21}
 
 
 def months(start: str, end: date) -> list[str]:
@@ -124,7 +124,8 @@ def build_long(store: PriceStore, out_dir: Path, real: dict) -> None:
         lines.append("  " + report("0050", r50["ret"], s50))
 
     # 正2：基準一律用大盤含息報酬（實測比 0050 市價更貼近，且和 2003 年前的估計方式一致）
-    for code, base, label in (("00631L", mkt_ret, "大盤含息"), ("00675L", mkt_ret, "大盤含息")):
+    for code, base, label in (("00631L", mkt_ret, "大盤含息"), ("00675L", mkt_ret, "大盤含息"),
+                              ("00685L", mkt_ret, "大盤含息")):
         if code not in real:
             continue
         r = real[code]
@@ -153,7 +154,11 @@ def build(store: PriceStore, out_dir: Path) -> bool:
         if px.empty:
             print(f"{code}：還沒有資料"); ok = False; continue
         px["date"] = pd.to_datetime(px["date"])
-        px = px.set_index("date").dropna(subset=["close"])
+        px = px.set_index("date")
+        # 整天沒成交（收盤價空白）的隔一個交易日：證交所不給漲跌，檢查時不算異常
+        traded = px["close"].notna()
+        after_no_trade = px.index[traded & ~traded.shift(1, fill_value=True)]
+        px = px[traded]
         ev = store.query("SELECT date, kind, prev_close, ref_price, value FROM corp_events WHERE code=?", (code,))
         sp = load_splits(code).rename(columns={"resume_date": "date"})
         sp = sp.assign(kind="split")[["date", "kind", "ratio"]]
@@ -165,7 +170,7 @@ def build(store: PriceStore, out_dir: Path) -> bool:
         real[code] = adj
 
         n_ev = (adj["event"] != "").sum()
-        jumps = unexplained_jumps(adj, JUMP_LIMIT[code])
+        jumps = unexplained_jumps(adj, JUMP_LIMIT[code], after_no_trade)
         print(f"\n{code}：{len(adj)} 天（{adj.index[0].date()} ~ {adj.index[-1].date()}），事件 {n_ev} 次")
         warn = adj[adj["event"].str.contains("注意")]
         if not warn.empty:

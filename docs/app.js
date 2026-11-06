@@ -1,14 +1,14 @@
 // 介面：讀設定 → 呼叫 engine.js 計算 → 畫結果
-import * as E from './engine.js?v=fb0fe6c16c';
-import { LineChart, ScatterChart } from './plot.js?v=fb0fe6c16c';
+import * as E from './engine.js?v=2312169c8d';
+import { LineChart, ScatterChart } from './plot.js?v=2312169c8d';
 
 // 版本號：tools/stamp_version.py 自動蓋上（日期 · 程式內容的 hash，跟 finance-app 一樣不手動編號）
-const BUILD_HASH = 'fb0fe6c16c';
-const BUILD_DATE = '2026-10-30';
+const BUILD_HASH = '2312169c8d';
+const BUILD_DATE = '2026-11-06';
 
-const ORDER = ['TAIEX', '0050', '00631L', '00675L'];
-const LABEL = { TAIEX: '大盤（含息）', '0050': '0050', '00631L': '00631L 台灣50正2', '00675L': '00675L 加權正2' };
-const SHORT = { TAIEX: '大盤', '0050': '0050', '00631L': '00631L', '00675L': '00675L' };
+const ORDER = ['TAIEX', '0050', '00631L', '00675L', '00685L'];
+const LABEL = { TAIEX: '大盤（含息）', '0050': '0050', '00631L': '00631L 台灣50正2', '00675L': '00675L 加權正2', '00685L': '00685L 群益加權正2' };
+const SHORT = { TAIEX: '大盤', '0050': '0050', '00631L': '00631L', '00675L': '00675L', '00685L': '00685L' };
 const DAY_MS = 86400000;
 const STORE_KEY = 'twbt.settings.v1';
 
@@ -20,17 +20,17 @@ const state = {
   metric: 'cagr', log: true,
   strategy: 'bh', trendCustom: { 1: {}, 2: {} }, signalPrice: 'raw', chartAsset: '00631L',
   mcN: 1000, mcYears: 10, mcSeed: 1, mcBlock: 120, mcMetric: 'cagr',
-  rbWeights: { '0050': 0, '00631L': 50, '00675L': 0, CASH: 50 }, rbFreq: 'Q', rbBand: 5, rbCash: 1, rbTrend: false,
+  rbWeights: { '0050': 0, '00631L': 50, '00675L': 0, '00685L': 0, CASH: 50 }, rbFreq: 'Q', rbBand: 5, rbCash: 1, rbTrend: false,
   robAsset: '00631L', robGrid: 'exit', robObj: 'cagr', robSplit: '2010-01-01', robWfStart: '2000-01-01', robWfStep: 5, robMetric: 'cagr',
 };
 const DEFAULTS = { ...state, assets: new Set(ORDER), rbWeights: { ...state.rbWeights } };
 
 const RB_PRESETS = [
-  ['00631L 50% ＋ 現金', { '0050': 0, '00631L': 50, '00675L': 0, CASH: 50 }],
-  ['00631L 65% ＋ 現金（約 1.3 倍）', { '0050': 0, '00631L': 65, '00675L': 0, CASH: 35 }],
-  ['0050 50% ＋ 00631L 50%', { '0050': 50, '00631L': 50, '00675L': 0, CASH: 0 }],
+  ['00631L 50% ＋ 現金', { '0050': 0, '00631L': 50, '00675L': 0, '00685L': 0, CASH: 50 }],
+  ['00631L 65% ＋ 現金（約 1.3 倍）', { '0050': 0, '00631L': 65, '00675L': 0, '00685L': 0, CASH: 35 }],
+  ['0050 50% ＋ 00631L 50%', { '0050': 50, '00631L': 50, '00675L': 0, '00685L': 0, CASH: 0 }],
 ];
-const RB_NAMES = { '0050': '0050', '00631L': '00631L', '00675L': '00675L', CASH: '現金' };
+const RB_NAMES = { '0050': '0050', '00631L': '00631L', '00675L': '00675L', '00685L': '00685L', CASH: '現金' };
 // 上一次蒙地卡羅結果（設定一樣才顯示）、執行中的代號（換設定就作廢）、執行中那次的設定（設定沒變就不中斷）
 let mcLast = null, mcToken = 0, mcRunning = null;
 const PARAM_FIELDS = [
@@ -86,7 +86,7 @@ function restore() {
     if (s) Object.assign(state, s, {
       assets: new Set(s.assets?.length ? s.assets : ORDER),
       trendCustom: { 1: { ...(s.trendCustom?.[1] || {}) }, 2: { ...(s.trendCustom?.[2] || {}) } },
-      rbWeights: { '0050': 0, '00631L': 0, '00675L': 0, CASH: 0, ...(s.rbWeights || { '00631L': 50, CASH: 50 }) },
+      rbWeights: { '0050': 0, '00631L': 0, '00675L': 0, '00685L': 0, CASH: 0, ...(s.rbWeights || { '00631L': 50, CASH: 50 }) },
     });
   } catch (_) { /* 忽略 */ }
   sanitize();
@@ -106,7 +106,7 @@ function sanitize() {
   num('mcN', 100, MC_MAX, true); num('mcYears', 1, 30, true); num('mcSeed', -1e9, 1e9, true); pick('mcBlock', [1, 20, 60, 120, 250]);
   num('rbBand', 0, 50); num('rbCash', 0, 10);
   pick('strategy', ['bh', 'trend', 'rebal']); pick('mode', ['period', 'rolling', 'random', 'mc', 'robust']);
-  pick('robAsset', ['0050', '00631L', '00675L']); pick('robGrid', Object.keys(E.ROBUST_GRIDS)); pick('robObj', ['cagr', 'calmar']);
+  pick('robAsset', ['0050', '00631L', '00675L', '00685L']); pick('robGrid', Object.keys(E.ROBUST_GRIDS)); pick('robObj', ['cagr', 'calmar']);
   pick('robMetric', Object.keys(ROB_METRICS)); num('robWfStep', 1, 10, true);
   pick('signalPrice', ['raw', 'adjusted']); pick('metric', Object.keys(METRICS)); pick('mcMetric', ['cagr', 'mdd', 'total']);
   pick('rbFreq', ['none', 'M', 'Q', 'H', 'Y']); pick('chartAsset', ORDER);
@@ -118,7 +118,7 @@ function sanitize() {
   state.assets = new Set([...state.assets].filter(c => ORDER.includes(c)));
   if (!state.assets.size) state.assets = new Set(ORDER);
   const w = {};
-  for (const k of ['0050', '00631L', '00675L', 'CASH']) { const v = Number(state.rbWeights?.[k]); w[k] = Number.isFinite(v) ? Math.min(100, Math.max(0, v)) : 0; }
+  for (const k of ['0050', '00631L', '00675L', '00685L', 'CASH']) { const v = Number(state.rbWeights?.[k]); w[k] = Number.isFinite(v) ? Math.min(100, Math.max(0, v)) : 0; }
   state.rbWeights = w;
   for (const lev of [1, 2]) {
     const c = state.trendCustom[lev] || {};
@@ -245,7 +245,7 @@ function buildControls() {
 function buildParams() {
   const D = E.TREND_DEFAULTS;
   const val = (lev, k) => state.trendCustom[lev][k] ?? D[lev][k];
-  $('params').innerHTML = `<span></span><span class="ph">正2（00631L、00675L）</span><span class="ph">1 倍（0050）</span>` +
+  $('params').innerHTML = `<span></span><span class="ph">正2（00631L、00675L、00685L）</span><span class="ph">1 倍（0050）</span>` +
     PARAM_FIELDS.map(([k, label, step, lo, hi]) => `<span class="pl">${label}</span>` + [2, 1].map(lev =>
       `<input type="number" inputmode="decimal" data-lev="${lev}" data-k="${k}" step="${step}" min="${lo}" max="${hi}" value="${val(lev, k)}" class="${state.trendCustom[lev][k] !== undefined ? 'changed' : ''}" aria-label="${label}（${lev === 2 ? '正2' : '1 倍'}）">`).join('')).join('');
   $('params').oninput = e => {
@@ -392,7 +392,7 @@ function rbLabel(k) {
 }
 const FIXED = new Set(['bh50', 'bh631', 'tr631']);
 const groupRow = (cols, prev, k) => (FIXED.has(k) && !FIXED.has(prev)) ? `<tr class="grp"><td colspan="${cols}">固定對照（不受上面的設定影響）</td></tr>` : '';
-const hasTrendEffect = cfg => cfg.trend && Object.keys(E.normWeights(cfg.weights)).some(k => k === '00631L' || k === '00675L');
+const hasTrendEffect = cfg => cfg.trend && Object.keys(E.normWeights(cfg.weights)).some(k => E.EXPOSURE[k] === 2);
 function cfgLabel(cfg) {
   const w = E.normWeights(cfg.weights);
   const mix = Object.entries(w).map(([k, v]) => `${RB_NAMES[k]} ${Math.round(v * 100)}%`).join(' ＋ ');
@@ -438,7 +438,7 @@ function renderRebalPeriod(cfg) {
   const wN = E.normWeights(cfg.weights);
   const tooSmall = Object.entries(res.lotPrice).filter(([c, pl]) => state.capital * wN[c] < pl / 2);
   let html = trSkip ? `<div class="warn">00631L 均線策略在這段期間最早 ${trSkip} 才能開始，跟這個配置差太多，沒有列入比較。</div>` : '';
-  if (cfg.trend && !hasTrendEffect(cfg)) html += `<div class="warn">這個配置沒有正2（00631L、00675L），「搭配均線訊號」只管正2，開或關結果都一樣。</div>`;
+  if (cfg.trend && !hasTrendEffect(cfg)) html += `<div class="warn">這個配置沒有正2（00631L、00675L、00685L），「搭配均線訊號」只管正2，開或關結果都一樣。</div>`;
   else if (hasTrendEffect(cfg) && nSig === 0) html += `<div class="warn">這段期間正2 的均線沒有任何動作（沒有出場、接刀或轉回續抱），所以「搭配均線訊號」開或關結果一樣。拉長期間（例如包含 2008、2020、2022 年）就看得出差別。</div>`;
   if (tooSmall.length) html += `<div class="warn">整張交易（一張 1000 股）：投入金額 × 比例不到半張，買不到 ${tooSmall.map(([c, pl]) => `${c}（配置 ${money(state.capital * wN[c])}，一張 ${money(pl)}）`).join('、')}，那部分會一直是現金。請提高投入金額。</div>`;
   html += aligned ? `<div class="warn">00631L 均線策略要先累積均線，最早 ${aligned} 才能開始；為了在同一段期間比較，全部從那天開始。</div>`
@@ -540,7 +540,7 @@ function renderRebalMulti(cfg, wins, title) {
 function runTrend() {
   if (state.mode === 'mc') { if (mcRunning && mcRunning.key === mcKey(mcRunning.compare)) return; mcToken++; renderMCIdle(); return; }
   if (state.mode === 'robust') return renderRobust();
-  if (!codes().length) { destroyCharts(); $('results').innerHTML = '<div class="warn">請至少選一檔 0050、00631L 或 00675L（大盤不能交易，不跑策略）。</div>'; return; }
+  if (!codes().length) { destroyCharts(); $('results').innerHTML = '<div class="warn">請至少選一檔 0050、00631L、00675L 或 00685L（大盤不能交易，不跑策略）。</div>'; return; }
   if (state.mode === 'period') {
     renderTrendPeriod(E.trendPeriod(DATA, codes(), state.start, state.end, opts(), state.trendCustom));
     return;
@@ -1121,7 +1121,7 @@ function renderRobust() {
       if (v === E.TREND_DEFAULTS[lev][k]) delete state.trendCustom[lev][k]; else state.trendCustom[lev][k] = v;
     }
     buildParams(); save(); run();
-    $('status').textContent = `已套用：${comboText(sw, sw.combos[sg.i])}（${lev === 2 ? '正2：00631L、00675L 共用' : '0050'}的均線參數）`;
+    $('status').textContent = `已套用：${comboText(sw, sw.combos[sg.i])}（${lev === 2 ? '正2：00631L、00675L、00685L 共用' : '0050'}的均線參數）`;
   });
   document.querySelector('table.heat').addEventListener('click', e => { const td = e.target.closest('td[data-i]'); if (td) $('robCell').textContent = tip(rows[+td.dataset.i]); });
 
@@ -1164,7 +1164,7 @@ function renderMCIdle() {
 
 async function runMC(compare) {
   if (state.strategy === 'rebal') return runRbMC(compare);
-  if (!codes().length) { $('results').innerHTML = '<div class="warn">請至少選一檔 0050、00631L 或 00675L。</div>'; return; }
+  if (!codes().length) { $('results').innerHTML = '<div class="warn">請至少選一檔 0050、00631L、00675L 或 00685L。</div>'; return; }
   const token = ++mcToken; mcRunning = { key: mcKey(compare), compare };
   const blocks = compare ? [1, 20, 60, 120, 250] : [state.mcBlock];
   const n = compare ? Math.min(state.mcN, 1000) : state.mcN;

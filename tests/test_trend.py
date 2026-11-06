@@ -50,11 +50,11 @@ def write_data(d: Path, close: np.ndarray):
     r = np.concatenate([[np.nan], close[1:] / close[:-1] - 1])
     pd.DataFrame({"close": 1.0, "tr_ret": r, "is_synthetic": 0, "tr_index": 1.0}, index=dates
                  ).rename_axis("date").to_csv(d / "long/TAIEX_long.csv")
-    for code in ("0050", "00631L", "00675L"):
+    for code in ("0050", "00631L", "00675L", "00685L"):
         pd.DataFrame({"ret": r, "adj_close": 1.0, "is_synthetic": 0}, index=dates
                      ).rename_axis("date").to_csv(d / f"long/{code}_long.csv")
         pd.DataFrame({"close": close}, index=dates).rename_axis("date").to_csv(d / f"{code}.csv")   # 實際每股價格
-    (d / "long/params.json").write_text('{"gap_0050": 0, "c_00631L": 0, "c_00675L": 0}')
+    (d / "long/params.json").write_text('{"gap_0050": 0, "c_00631L": 0, "c_00675L": 0, "c_00685L": 0}')
     return dates
 
 
@@ -115,7 +115,7 @@ class TestTrendBacktest(unittest.TestCase):
         tb = TrendBacktest(bh, {c: P for c in bh.rets.columns})
         self.assertTrue(tb.windows([(self.dates[0], self.dates[-1])]).empty)   # 起點早於均線算得出來的日子，不比
         w = tb.windows([(self.dates[4], self.dates[-1])])
-        self.assertEqual(set(w["標的"]), {"0050", "00631L 台灣50正2", "00675L 加權正2"})   # 大盤不跑策略
+        self.assertEqual(set(w["標的"]), {"0050", "00631L 台灣50正2", "00675L 加權正2", "00685L 群益加權正2"})   # 大盤不跑策略
         self.assertTrue(np.allclose(w["持有總報酬"], 0.0))       # 10 元買 100 張 → 10 元賣
         self.assertAlmostEqual(w["策略總報酬"].iloc[0], 1_243_000 / 1_000_000 - 1)
 

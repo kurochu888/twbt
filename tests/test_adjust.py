@@ -53,14 +53,25 @@ class TestAdjust(unittest.TestCase):
         jumps = unexplained_jumps(adjust(px, pd.DataFrame(columns=["date", "kind", "ratio"])), 0.105)
         self.assertEqual(len(jumps), 1)
 
+    def test_after_no_trade_day(self):
+        # 01-03 整天沒成交，01-06 證交所不給漲跌：小幅變動不算異常，但大跳動（漏分割）還是要抓到
+        px = prices([("2025-01-02", 20.0, 0.0), ("2025-01-06", 20.4, np.nan), ("2025-01-07", 20.5, 0.1)])
+        a = adjust(px, pd.DataFrame(columns=["date", "kind", "ratio"]))
+        self.assertEqual(len(unexplained_jumps(a, 0.21)), 1)
+        self.assertTrue(unexplained_jumps(a, 0.21, pd.to_datetime(["2025-01-06"])).empty)
+        px = prices([("2025-01-02", 240.0, 0.0), ("2025-01-06", 10.0, np.nan)])
+        a = adjust(px, pd.DataFrame(columns=["date", "kind", "ratio"]))
+        self.assertEqual(len(unexplained_jumps(a, 0.21, pd.to_datetime(["2025-01-06"]))), 1)
+
     def test_roc_date(self):
         self.assertEqual(str(roc_to_date("115/09/01")), "2026-09-01")
         self.assertEqual(str(roc_to_date("114年01月17日")), "2025-01-17")
 
     def test_splits_table(self):
         s = load_splits()
-        self.assertEqual(set(s.code), {"0050", "00631L"})
+        self.assertEqual(set(s.code), {"0050", "00631L", "00685L"})
         self.assertEqual(int(s[s.code == "00631L"].ratio.iloc[0]), 22)
+        self.assertEqual(int(s[s.code == "00685L"].ratio.iloc[0]), 24)
 
 
 if __name__ == "__main__":

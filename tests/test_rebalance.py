@@ -21,11 +21,11 @@ def write(d: Path, dates, series: dict):
         return np.concatenate([[np.nan], x[1:] / x[:-1] - 1])
     pd.DataFrame({"close": 1.0, "tr_ret": r(series["TAIEX"]), "is_synthetic": 0, "tr_index": 1.0}, index=dates
                  ).rename_axis("date").to_csv(d / "long/TAIEX_long.csv")
-    for c in ("0050", "00631L", "00675L"):
+    for c in ("0050", "00631L", "00675L", "00685L"):
         pd.DataFrame({"ret": r(series[c]), "adj_close": 1.0, "is_synthetic": 0}, index=dates
                      ).rename_axis("date").to_csv(d / f"long/{c}_long.csv")
         pd.DataFrame({"close": np.asarray(series[c], float)}, index=dates).rename_axis("date").to_csv(d / f"{c}.csv")
-    (d / "long/params.json").write_text('{"gap_0050": 0, "c_00631L": 0, "c_00675L": 0, "dividend_yield": 0}')
+    (d / "long/params.json").write_text('{"gap_0050": 0, "c_00631L": 0, "c_00675L": 0, "c_00685L": 0, "dividend_yield": 0}')
 
 
 class TestRebalance(unittest.TestCase):
@@ -38,7 +38,7 @@ class TestRebalance(unittest.TestCase):
         for i, d in enumerate(self.dates):
             p631[i] = 1.0 if d < pd.Timestamp("2020-01-31") else (2.0 if d < pd.Timestamp("2020-02-28") else 1.0)
         flat = np.ones(n)
-        write(Path(self.tmp.name), self.dates, {"TAIEX": flat, "0050": flat, "00631L": p631, "00675L": flat})
+        write(Path(self.tmp.name), self.dates, {"TAIEX": flat, "0050": flat, "00631L": p631, "00675L": flat, "00685L": flat})
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -116,7 +116,7 @@ class TestRebalanceHalt(unittest.TestCase):
         n = len(dates)
         p631 = np.where(dates < pd.Timestamp("2020-03-27"), 1.0, 2.0)
         flat = np.ones(n)
-        write(Path(tmp.name), dates, {"TAIEX": flat, "0050": flat, "00631L": p631, "00675L": flat})
+        write(Path(tmp.name), dates, {"TAIEX": flat, "0050": flat, "00631L": p631, "00675L": flat, "00685L": flat})
         # 00631L 3/31～4/2 暫停交易：長期序列裡沒有這幾天
         f = Path(tmp.name) / "long/00631L_long.csv"
         df = pd.read_csv(f, index_col=0, parse_dates=True)
@@ -136,7 +136,7 @@ class TestRebalanceTrend(unittest.TestCase):
         path = [10, 10, 10, 10, 10, 11, 12, 13, 10.5, 8.5, 7.0, 5.5, 9.0, 10.0] + [10.0] * 20
         dates = pd.bdate_range("2021-01-04", periods=len(path))
         flat = np.ones(len(path))
-        write(Path(tmp.name), dates, {"TAIEX": flat, "0050": flat, "00631L": path, "00675L": flat})
+        write(Path(tmp.name), dates, {"TAIEX": flat, "0050": flat, "00631L": path, "00675L": flat, "00685L": flat})
         bh = BuyHold(tmp.name, cost=NO_COST, capital=1_000_000)
         P = TrendParams(3, 5, 0.9, 1.0, 1.03, 0.15, 2)
         tb = TrendBacktest(bh, {c: P for c in bh.rets.columns})

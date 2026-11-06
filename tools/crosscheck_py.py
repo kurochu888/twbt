@@ -33,14 +33,14 @@ for k in range(int(sys.argv[3])):
                 capital=rnd.choice([1_000_000, 50_000, 3_000_000]), sp=rnd.choice(["raw", "adjusted"]),
                 custom={"1": rand_params(1), "2": rand_params(2)}, roll=rnd.choice([None, None, 3, 10, 20]))
     if t == "rebal":
-        w = {c: rnd.choice([0, 0, 10, 25, 50, 65]) / 100 for c in ("0050", "00631L", "00675L", "CASH")}
+        w = {c: rnd.choice([0, 0, 10, 25, 50, 65]) / 100 for c in ("0050", "00631L", "00675L", "00685L", "CASH")}
         if sum(w.values()) == 0: w["CASH"] = 1
         case.update(weights=w, freq=rnd.choice(["none", "M", "Q", "H", "Y"]), band=rnd.choice([0, 0, 0.03, 0.1]), cash=rnd.choice([0, 0.01, 0.02]), rtrend=rnd.random() < 0.5)
     cases.append(case)
 # 參數穩健性：另外 8 組（每組要跑幾十個參數，比較慢）
 ROB = {"exit": "均線出場", "pyramid": "接刀", "recover": "轉回"}
 for k in range(8):
-    cases.append(dict(type="robust", asset=rnd.choice(["0050", "00631L", "00675L"]), grid=rnd.choice(list(ROB)), syn=rnd.random() < 0.7,
+    cases.append(dict(type="robust", asset=rnd.choice(["0050", "00631L", "00675L", "00685L"]), grid=rnd.choice(list(ROB)), syn=rnd.random() < 0.7,
                       excess=rnd.random() < 0.7, disc=rnd.choice([1, 0.6, 0]), capital=rnd.choice([1_000_000, 300_000]), sp=rnd.choice(["raw", "adjusted"]),
                       custom={"1": rand_params(1), "2": rand_params(2)}, split=rnd.choice(["2005-01-01", "2010-01-01", "2018-06-01"]),
                       ws=rnd.choice(["1998-01-01", "2000-01-01", "2012-01-01"]), step=rnd.choice([2, 3, 5]), obj=rnd.choice(["cagr", "calmar"])))
@@ -52,7 +52,7 @@ for c in cases:
         params = {code: to_tp(2 if LEVERAGE[code] >= 2 else 1, c["custom"]["2" if LEVERAGE[code] >= 2 else "1"]) for code in bh.rets.columns}
         if c["type"] == "bh":
             res = {}
-            for code in ("TAIEX", "0050", "00631L", "00675L"):
+            for code in ("TAIEX", "0050", "00631L", "00675L", "00685L"):
                 try:
                     eq = bh.equity(code, c["start"], c["end"]); st = summarize(eq)
                     res[code] = [str(eq.index[0].date()), float(eq.iloc[-1]), st["最大回撤"], st["最長套牢"], str(st["回撤高點"]), str(st["回到前高"])]
@@ -61,7 +61,7 @@ for c in cases:
             if c["roll"]: w = bh.rolling(c["roll"]); r["roll"] = {k: [len(v), float(v["年化報酬"].median()), float(v["最長套牢"].median()), int(v["套牢未結束"].sum())] for k, v in w.groupby("標的")} if len(w) else {}
         elif c["type"] == "trend":
             tb = TrendBacktest(bh, params, signal_price=c["sp"]); res = {}
-            for code in ("0050", "00631L", "00675L"):
+            for code in ("0050", "00631L", "00675L", "00685L"):
                 try:
                     x = tb.run(code, c["start"], c["end"]); st = summarize(x.equity)
                     res[code] = [str(x.equity.index[0].date()), float(x.equity.iloc[-1]), st["最大回撤"], len(x.events), st["最長套牢"]]

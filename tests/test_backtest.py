@@ -17,13 +17,13 @@ DATES = pd.bdate_range("2000-01-03", "2009-12-31")
 
 def make_data(d: Path):
     (d / "long").mkdir(parents=True)
-    (d / "long/params.json").write_text('{"gap_0050": 0.02, "c_00631L": 0.01, "c_00675L": -0.01}')
+    (d / "long/params.json").write_text('{"gap_0050": 0.02, "c_00631L": 0.01, "c_00675L": -0.01, "c_00685L": -0.01}')
     n = len(DATES)
     r_mkt = np.full(n, 0.0004)
     r_mkt[0] = np.nan
     pd.DataFrame({"close": 1000.0, "tr_ret": r_mkt, "is_synthetic": 0, "tr_index": 1.0},
                  index=DATES).rename_axis("date").to_csv(d / "long/TAIEX_long.csv")
-    for code, k in (("0050", 1), ("00631L", 2), ("00675L", 2)):
+    for code, k in (("0050", 1), ("00631L", 2), ("00675L", 2), ("00685L", 2)):
         r = r_mkt * k
         syn = (DATES < "2005-01-01").astype(int)
         df = pd.DataFrame({"ret": r, "adj_close": 1.0, "is_synthetic": syn}, index=DATES).rename_axis("date")

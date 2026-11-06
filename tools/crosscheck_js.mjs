@@ -2,7 +2,7 @@ import fs from 'fs';
 import * as E from './engine.mjs';
 const data = E.prepare(JSON.parse(fs.readFileSync(process.argv[3])));
 const ref = JSON.parse(fs.readFileSync(process.argv[2]));
-const NAMES = { TAIEX: '大盤（含息）', '0050': '0050', '00631L': '00631L 台灣50正2', '00675L': '00675L 加權正2' };
+const NAMES = { TAIEX: '大盤（含息）', '0050': '0050', '00631L': '00631L 台灣50正2', '00675L': '00675L 加權正2', '00685L': '00685L 群益加權正2' };
 let n = 0, bad = [];
 let worst = 0;
 const close = (a, b) => { n++; const d = Math.abs(a - b) / Math.max(1, Math.abs(b)); if (d > worst) worst = d; return d < 1e-6; };
@@ -14,28 +14,28 @@ for (const x of ref) {
   const custom = { 1: c.custom['1'], 2: c.custom['2'] };
   try {
     if (c.type === 'bh') {
-      const r = E.period(data, ['TAIEX', '0050', '00631L', '00675L'], c.start, c.end, opts);
-      for (const code of ['TAIEX', '0050', '00631L', '00675L']) {
+      const r = E.period(data, ['TAIEX', '0050', '00631L', '00675L', '00685L'], c.start, c.end, opts);
+      for (const code of ['TAIEX', '0050', '00631L', '00675L', '00685L']) {
         const py = x.period[code], js = r.results?.find(y => y.code === code);
         if (!py !== !js) { bad.push(['bh 有無不同', code, c, py, !!js]); continue; }
         if (!py) continue;
         if (js.stats.start !== py[0] || !close(js.stats.final, py[1]) || !close(js.stats.mdd, py[2]) || !close(js.stats.uw, py[3])
           || js.stats.mddTop !== py[4] || (js.stats.mddRecovery ?? '尚未') !== py[5]) bad.push(['bh', code, c.start, c.end, js.stats.start, py[0], js.stats.final, py[1], js.stats.uw, py[3], js.stats.mddTop, py[4], js.stats.mddRecovery, py[5]]);
       }
-      if (c.roll) { const rows = E.rolling(data, ['TAIEX', '0050', '00631L', '00675L'], c.roll, opts);
+      if (c.roll) { const rows = E.rolling(data, ['TAIEX', '0050', '00631L', '00675L', '00685L'], c.roll, opts);
         for (const [code, nm] of Object.entries(NAMES)) { const g = rows.filter(r => r.code === code), py = x.roll[nm];
           if ((g.length || 0) !== (py ? py[0] : 0) || (py && (!close(q50(g.map(r => r.cagr)), py[1]) || !close(q50(g.map(r => r.uw)), py[2])
             || g.filter(r => r.uwOpen).length !== py[3]))) bad.push(['bh roll', code, g.length, py]); } }
     } else if (c.type === 'trend') {
-      const r = E.trendPeriod(data, ['0050', '00631L', '00675L'], c.start, c.end, opts, custom);
-      for (const code of ['0050', '00631L', '00675L']) {
+      const r = E.trendPeriod(data, ['0050', '00631L', '00675L', '00685L'], c.start, c.end, opts, custom);
+      for (const code of ['0050', '00631L', '00675L', '00685L']) {
         const py = x.period[code], js = r.results?.find(y => y.code === code);
         if (!py !== !js) { bad.push(['trend 有無不同', code, c.start, c.end, c.custom, py, js ? js.stats.start : r.error]); continue; }
         if (!py) continue;
         if (js.stats.start !== py[0] || !close(js.stats.final, py[1]) || !close(js.stats.mdd, py[2]) || js.events.length !== py[3] || !close(js.stats.uw, py[4])) bad.push(['trend', code, c.start, c.end, js.stats.start, py[0], js.stats.final, py[1], js.events.length, py[3], js.stats.uw, py[4]]);
       }
-      if (c.roll) { const rows = E.trendWindows(data, ['0050', '00631L', '00675L'], E.rollingWins(data, c.roll), opts, custom);
-        for (const code of ['0050', '00631L', '00675L']) { const g = rows.filter(r => r.code === code), py = x.roll[NAMES[code]];
+      if (c.roll) { const rows = E.trendWindows(data, ['0050', '00631L', '00675L', '00685L'], E.rollingWins(data, c.roll), opts, custom);
+        for (const code of ['0050', '00631L', '00675L', '00685L']) { const g = rows.filter(r => r.code === code), py = x.roll[NAMES[code]];
           if ((g.length || 0) !== (py ? py[0] : 0) || (py && (!close(q50(g.map(r => r.cagr)), py[1]) || !close(q50(g.map(r => r.uw)), py[2])
             || !close(q50(g.map(r => r.bhUw)), py[3])))) bad.push(['trend roll', code, c.roll, g.length, py]); } }
     } else if (c.type === 'robust') {

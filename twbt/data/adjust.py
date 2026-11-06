@@ -71,10 +71,15 @@ def adjust(prices: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
     return p
 
 
-def unexplained_jumps(adj: pd.DataFrame, limit: float) -> pd.DataFrame:
-    """找出「沒有事件卻大幅跳動」的日子：通常代表漏掉分割或配息。"""
+def unexplained_jumps(adj: pd.DataFrame, limit: float, after_no_trade=()) -> pd.DataFrame:
+    """找出「沒有事件卻大幅跳動」的日子：通常代表漏掉分割或配息。
+
+    after_no_trade：前一個交易日整天沒成交的日子。證交所在這種日子不給漲跌（沒有前收可比），
+    漲跌空白是正常的，只要報酬沒超過門檻就不算異常（成交稀少的 ETF 例如早年的 00685L 很常見）。
+    """
     big = adj["ret"].abs() > limit
     x_day = adj["change"].isna() & adj["close"].notna() & (adj["event"] == "")
+    x_day &= ~adj.index.isin(pd.DatetimeIndex(after_no_trade))
     x_day.iloc[0] = False
     bad = adj[big | x_day]
     return bad[["close", "change", "ret", "event"]]

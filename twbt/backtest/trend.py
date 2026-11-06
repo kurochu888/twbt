@@ -43,7 +43,7 @@ WATCH, HOLD, WAIT = 0, 1, 2
 NONE, RECOVER, ADD, EXIT = 0, 1, 2, 3
 STATUS_NAME = {WATCH: "觀望", HOLD: "續抱", WAIT: "接刀中"}
 ACTION_NAME = {RECOVER: "轉回續抱", ADD: "接刀", EXIT: "出場"}
-LEVERAGE = {"TAIEX": 1, "0050": 1, "00631L": 2, "00675L": 2}
+LEVERAGE = {"TAIEX": 1, "0050": 1, "00631L": 2, "00675L": 2, "00685L": 2}
 
 
 @dataclass

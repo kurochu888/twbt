@@ -423,7 +423,7 @@ export function winRate(rows, a, b, col = 'cagr') {
 
 // ====================== 均線趨勢策略（接刀版） ======================
 // 規則照 kurochu888/finance-app 的 computeTrend()/runBacktest()，跟 twbt/backtest/trend.py 逐行對應。
-export const LEVERAGE = { TAIEX: 1, '0050': 1, '00631L': 2, '00675L': 2 };
+export const LEVERAGE = { TAIEX: 1, '0050': 1, '00631L': 2, '00675L': 2, '00685L': 2 };
 export const TREND_DEFAULTS = {
   2: { maFast: 120, maSlow: 240, exitBuffer: 0.90, recoverSlope: 1.001, recoverStrong: 1.02, pyramidGap: 0.15, pyramidLevels: 2 },
   1: { maFast: 100, maSlow: 200, exitBuffer: 0.925, recoverSlope: 1.001, recoverStrong: 1.02, pyramidGap: 0.15, pyramidLevels: 1 },
@@ -904,10 +904,10 @@ export function mcSummary(rows) {
 
 // ====================== 再平衡策略 ======================
 // 跟 twbt/backtest/rebalance.py 逐行對應。cfg = {weights: {code: w, CASH: w}, freq: 'none'|'M'|'Q'|'H'|'Y', band, cashRate, trend}
-export const REBAL_ASSETS = ['0050', '00631L', '00675L'];
-const LEVERAGED = new Set(['00631L', '00675L']);
+export const REBAL_ASSETS = ['0050', '00631L', '00675L', '00685L'];
+const LEVERAGED = new Set(['00631L', '00675L', '00685L']);
 const MIN_TRADE = 1000;   // 再平衡時單筆不到 1,000 元就不交易（跟 Python 版一樣）
-export const EXPOSURE = { '0050': 1, '00631L': 2, '00675L': 2, CASH: 0 };
+export const EXPOSURE = { '0050': 1, '00631L': 2, '00675L': 2, '00685L': 2, CASH: 0 };
 
 export function normWeights(weights) {
   const w = Object.fromEntries(Object.entries(weights).filter(([, v]) => v > 0));

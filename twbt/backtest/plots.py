@@ -5,8 +5,10 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 LABEL = {"大盤（含息）": "TAIEX TR", "0050": "0050",
-         "00631L 台灣50正2": "00631L (TW50 2x)", "00675L 加權正2": "00675L (TAIEX 2x)"}
-COLOR = {"TAIEX TR": "#7f7f7f", "0050": "#1f77b4", "00631L (TW50 2x)": "#d62728", "00675L (TAIEX 2x)": "#ff7f0e"}
+         "00631L 台灣50正2": "00631L (TW50 2x)", "00675L 加權正2": "00675L (TAIEX 2x)",
+         "00685L 群益加權正2": "00685L (TAIEX 2x, Capital)"}
+COLOR = {"TAIEX TR": "#7f7f7f", "0050": "#1f77b4", "00631L (TW50 2x)": "#d62728", "00675L (TAIEX 2x)": "#ff7f0e",
+         "00685L (TAIEX 2x, Capital)": "#2ca02c"}
 
 
 def _lab(name):

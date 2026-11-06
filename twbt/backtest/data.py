@@ -9,7 +9,7 @@ import pandas as pd
 
 from ..data.synthetic import year_frac
 
-ASSETS = ["TAIEX", "0050", "00631L", "00675L"]
+ASSETS = ["TAIEX", "0050", "00631L", "00675L", "00685L"]
 # 網頁的 returns.json 把每日報酬存成「× SCALE 取整數」。Python 這邊讀進來也量化成一樣的值，
 # 兩邊的輸入逐位元相同，「夠不夠買一張」這類剛好卡在邊界的判斷才不會因為小數點後第 10 位不同而分岔。
 SCALE = 1e10
@@ -20,9 +20,10 @@ def quantize(x):
     return np.round(x * SCALE) / SCALE
 
 
-NAMES = {"TAIEX": "大盤（含息）", "0050": "0050", "00631L": "00631L 台灣50正2", "00675L": "00675L 加權正2"}
+NAMES = {"TAIEX": "大盤（含息）", "0050": "0050", "00631L": "00631L 台灣50正2", "00675L": "00675L 加權正2",
+         "00685L": "00685L 群益加權正2"}
 # 證交稅類別：index 是比較基準、不能直接交易，不收任何成本
-KIND = {"TAIEX": "index", "0050": "etf", "00631L": "etf", "00675L": "etf"}
+KIND = {"TAIEX": "index", "0050": "etf", "00631L": "etf", "00675L": "etf", "00685L": "etf"}
 
 
 def load_returns(data_dir: str | Path, use_synthetic: bool = True,

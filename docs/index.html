@@ -4,14 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>台股回測</title>
-<meta name="description" content="大盤、0050、00631L、00675L 買進持有回測：自訂區間、滾動區間、隨機區間">
+<meta name="description" content="大盤、0050、00631L、00675L、00685L 買進持有回測：自訂區間、滾動區間、隨機區間">
 <meta name="theme-color" content="#f6f5f1" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#16181d" media="(prefers-color-scheme: dark)">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231d4ed8'/%3E%3Cpath d='M6 22l6-7 5 4 9-11' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=fb0fe6c16c">
+<link rel="stylesheet" href="style.css?v=2312169c8d">
 </head>
 <body>
 <button class="update-banner" id="updateBanner" type="button" hidden>🔄 有新版本，點這裡更新</button>
@@ -175,7 +175,7 @@
     <p class="hint" style="margin:0 0 12px">均線參數是看過去行情設的，可能只是剛好貼合過去。這裡把兩個參數各換一排值、其他照上面的設定，每一組都從同一天開始跑到最新，看你的設定附近是不是一片差不多好的「高原」，以及用前一段歷史挑參數，後一段還好不好。</p>
     <div class="grid2">
       <label class="field"><span class="label">標的</span>
-        <select id="robAsset"><option value="00631L">00631L 台灣50正2</option><option value="00675L">00675L 加權正2</option><option value="0050">0050</option></select></label>
+        <select id="robAsset"><option value="00631L">00631L 台灣50正2</option><option value="00675L">00675L 加權正2</option><option value="00685L">00685L 群益加權正2</option><option value="0050">0050</option></select></label>
       <label class="field"><span class="label">掃描哪兩個參數</span>
         <select id="robGrid"><option value="exit">快線 × 出場乘數</option><option value="pyramid">接刀間距 × 層數</option><option value="recover">轉回斜率 × 強反彈</option></select></label>
     </div>
@@ -213,10 +213,10 @@
       <p><b>所有策略都是整張交易（一張 = 1000 股）</b>，跟實際下單一樣：買進時買「錢夠買的最多張數」（含手續費），買不滿一張的零頭留在現金。價格用當時的實際收盤價（分割前一張 = 分割前的 1000 股）。0050 的配息發現金，除息那天現金夠買一張就再買進（配息再投入）。手續費、證交稅四捨五入到整數元。</p>
       <dl class="doc">
         <dt>策略</dt><dd>買進持有／均線趨勢／再平衡。選均線趨勢會多出「均線趨勢策略」卡片；選再平衡會多出「再平衡策略」卡片（再平衡打開「搭配均線訊號」時，均線卡片也會出現）。</dd>
-        <dt>標的</dt><dd>大盤（含息）、0050、00631L、00675L，可複選，點一下切換。「大盤」是加權報酬指數，只當比較基準：不能交易、不扣成本，均線策略也不跑它。再平衡策略不用這一欄，改在比例欄位設定。</dd>
-        <dt>投入金額</dt><dd>期初一次投入多少錢。整張交易時金額越小，零頭（買不滿一張的現金）占比越高，結果越偏離理論報酬；買不起一張時那一檔整段都是現金（結果上方會提醒）。一張的價格：0050 約 10 萬、00631L 約 3～4 萬、00675L 約 30 萬（2026 年 10 月）。最低手續費 20 元也是金額越小影響越大。</dd>
+        <dt>標的</dt><dd>大盤（含息）、0050、00631L、00675L、00685L，可複選，點一下切換。「大盤」是加權報酬指數，只當比較基準：不能交易、不扣成本，均線策略也不跑它。再平衡策略不用這一欄，改在比例欄位設定。</dd>
+        <dt>投入金額</dt><dd>期初一次投入多少錢。整張交易時金額越小，零頭（買不滿一張的現金）占比越高，結果越偏離理論報酬；買不起一張時那一檔整段都是現金（結果上方會提醒）。一張的價格：0050 約 10 萬、00631L 約 3～4 萬、00675L 約 30 萬、00685L 約 1 萬（2026 年 11 月）。最低手續費 20 元也是金額越小影響越大。</dd>
         <dt>手續費折扣</dt><dd>券商手續費 0.1425% × 折扣，每筆最低 20 元；「免手續費」= 完全不收。賣出另外收 ETF 證交稅 0.1%（這個沒有折扣）。</dd>
-        <dt>使用上市前的模擬資料</dt><dd><b>開著</b>：所有標的都從 1990 年開始，上市前用模擬資料（圖上虛線），可以看 1990、2000、2008 這些大崩盤。<b>關掉</b>：只用真實資料，各標的可回測的起點：0050 2010-01-04、00631L 2014-10-31、00675L 2017-05-02（這段期間大多是多頭，結果會偏樂觀）。區間早於真實資料時，那一檔會被略過並顯示原因。</dd>
+        <dt>使用上市前的模擬資料</dt><dd><b>開著</b>：所有標的都從 1990 年開始，上市前用模擬資料（圖上虛線），可以看 1990、2000、2008 這些大崩盤。<b>關掉</b>：只用真實資料，各標的可回測的起點：0050 2010-01-04、00631L 2014-10-31、00675L 2017-05-02、00685L 2017-04-05（這段期間大多是多頭，結果會偏樂觀）。區間早於真實資料時，那一檔會被略過並顯示原因。</dd>
         <dt>模擬段：台灣50 每年贏大盤</dt><dd>0050 上市前的模擬要不要加上「每年贏大盤約 1.3%」（2010 年後實測，多半是台積電的貢獻）。<b>關掉 = 保守情境</b>：假設以前的 0050 跟大盤一樣，00631L 的模擬也一起變保守。想看「過去的好運不一定會重演」時關掉比較。</dd>
       </dl>
     </details>
@@ -250,7 +250,7 @@
 
     <details>
       <summary>4. 均線趨勢策略的參數</summary>
-      <p>正2（00631L、00675L）和 1 倍（0050）各一組參數。改過的格子會變色，「恢復預設」全部改回去。</p>
+      <p>正2（00631L、00675L、00685L）和 1 倍（0050）各一組參數。改過的格子會變色，「恢復預設」全部改回去。</p>
       <dl class="doc">
         <dt>快線、慢線（日）</dt><dd>兩條簡單移動平均的天數（只算有交易的日子）。預設 正2 120／240、0050 100／200。</dd>
         <dt>出場乘數</dt><dd>收盤跌破「快線 × 出場乘數」就全部賣出。0.90 = 跌破快線 10% 才出場；越接近 1 越早出場、但也越容易被洗掉。預設 正2 0.90、0050 0.925。</dd>
@@ -266,7 +266,7 @@
     <details>
       <summary>5. 再平衡策略的設定</summary>
       <dl class="doc">
-        <dt>配置比例</dt><dd>0050、00631L、00675L、現金各填幾 %。加總不是 100% 會照比例換算（例如 30＋30 = 各 50%）；空白 = 0%。下面會顯示「曝險約幾倍」：正2 算 2 倍、0050 算 1 倍、現金 0 倍（例如 00631L 50%＋現金 50% ≈ 1 倍，跟全押 0050 差不多）。上方有三個常用配置可以直接點。</dd>
+        <dt>配置比例</dt><dd>0050、00631L、00675L、00685L、現金各填幾 %。加總不是 100% 會照比例換算（例如 30＋30 = 各 50%）；空白 = 0%。下面會顯示「曝險約幾倍」：正2 算 2 倍、0050 算 1 倍、現金 0 倍（例如 00631L 50%＋現金 50% ≈ 1 倍，跟全押 0050 差不多）。上方有三個常用配置可以直接點。</dd>
         <dt>定期檢查</dt><dd>不定期／每月／每季／每半年／每年：新的月份（季、半年、年）第一個交易日檢查。</dd>
         <dt>偏離門檻（比例差 %）</dt><dd>
           任一部位（含現金）占總資產的比例，跟目標<b>直接相差</b>超過幾 % 才調回。例如目標 50%、門檻 10 → 漲到 60% 以上或跌到 40% 以下才調；不是「50% 的 10%」。<br>
@@ -348,6 +348,6 @@
   </section>
 </main>
 
-<script type="module" src="app.js?v=fb0fe6c16c"></script>
+<script type="module" src="app.js?v=2312169c8d"></script>
 </body>
 </html>
